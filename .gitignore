@@ -23,6 +23,9 @@ env/
 data/
 **/data/
 
+# Nested standalone project not tracked here
+MOS-main/
+
 # Training / evaluation outputs
 output/
 **/output/
