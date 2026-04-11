@@ -1,0 +1,279 @@
+# ================= 基础配置 =================
+CLASS_NAMES: ['car','truck', 'construction_vehicle', 'bus', 'trailer',
+              'barrier', 'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone']
+
+DATA_CONFIG:
+    _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
+    
+    # Night 目标域数据
+    DATA_SPLIT: {
+        'train': val,
+        'test': val
+    }
+    INFO_PATH: {
+        'train': [nuscenes_infos_10sweeps_val_night.pkl],
+        'test': [nuscenes_infos_10sweeps_val_night.pkl],
+    }
+
+    BALANCED_RESAMPLING: False 
+    POINT_CLOUD_RANGE: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+    CAMERA_CONFIG:
+        USE_CAMERA: True
+        IMAGE:
+            FINAL_DIM: [256,704]
+            RESIZE_LIM_TRAIN: [0.38, 0.55]
+            RESIZE_LIM_TEST: [0.48, 0.48]
+
+    DATA_AUGMENTOR:
+        DISABLE_AUG_LIST: ['placeholder']
+        AUG_CONFIG_LIST:
+            - NAME: random_world_flip
+              ALONG_AXIS_LIST: ['x', 'y']
+            - NAME: random_world_rotation
+              WORLD_ROT_ANGLE: [-0.78539816, 0.78539816]
+            - NAME: random_world_scaling
+              WORLD_SCALE_RANGE: [0.9, 1.1]
+            - NAME: random_world_translation
+              NOISE_TRANSLATE_STD: [0.5, 0.5, 0.5]
+            - NAME: imgaug
+              ROT_LIM: [-5.4, 5.4]
+              RAND_FLIP: True
+
+    DATA_PROCESSOR:
+        - NAME: mask_points_and_boxes_outside_range
+          REMOVE_OUTSIDE_BOXES: True
+        - NAME: shuffle_points
+          SHUFFLE_ENABLED: {
+            'train': True, # TTA 需要打乱顺序以保证 BN 统计量的鲁棒性
+            'test': False
+          }
+        - NAME: transform_points_to_voxels
+          VOXEL_SIZE: [0.075, 0.075, 0.2]
+          MAX_POINTS_PER_VOXEL: 10
+          MAX_NUMBER_OF_VOXELS: {
+            'train': 120000,
+            'test': 160000
+          }
+        - NAME: image_calibrate
+        - NAME: image_normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+
+# ================= 模型配置 (BEVFusion) =================
+MODEL:
+    NAME: BevFusion
+
+    VFE:
+        NAME: MeanVFE
+
+    BACKBONE_3D:
+        NAME: VoxelResBackBone8x
+        USE_BIAS: False
+
+    MAP_TO_BEV:
+        NAME: HeightCompression
+        NUM_BEV_FEATURES: 256
+    
+    # 【核心修正】修复了这里的缩进问题，确保 NAME 是 IMAGE_BACKBONE 的子项
+    IMAGE_BACKBONE:
+        NAME: SwinTransformer
+        EMBED_DIMS: 96
+        DEPTHS: [2, 2, 6, 2]
+        NUM_HEADS: [3, 6, 12, 24]
+        WINDOW_SIZE: 7
+        MLP_RATIO: 4
+        DROP_RATE: 0.
+        ATTN_DROP_RATE: 0.
+        DROP_PATH_RATE: 0.2
+        PATCH_NORM: True
+        OUT_INDICES: [1, 2, 3]
+        WITH_CP: False
+        CONVERT_WEIGHTS: True
+        INIT_CFG:
+            type: Pretrained
+            checkpoint: /root/autodl-tmp/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
+    
+    NECK:
+        NAME: GeneralizedLSSFPN
+        IN_CHANNELS: [192, 384, 768]
+        OUT_CHANNELS: 256
+        START_LEVEL: 0
+        END_LEVEL: -1
+        NUM_OUTS: 3
+    
+    VTRANSFORM:
+        NAME: DepthLSSTransform
+        IMAGE_SIZE: [256, 704]
+        IN_CHANNEL: 256
+        OUT_CHANNEL: 80
+        FEATURE_SIZE: [32, 88]
+        XBOUND: [-54.0, 54.0, 0.3]
+        YBOUND: [-54.0, 54.0, 0.3]
+        ZBOUND: [-10.0, 10.0, 20.0]
+        DBOUND: [1.0, 60.0, 0.5]
+        DOWNSAMPLE: 2
+    
+    FUSER:
+        NAME: ConvFuser
+        IN_CHANNEL: 336
+        OUT_CHANNEL: 256
+    
+    BACKBONE_2D:
+        NAME: BaseBEVBackbone
+        LAYER_NUMS: [5, 5]
+        LAYER_STRIDES: [1, 2]
+        NUM_FILTERS: [128, 256]
+        UPSAMPLE_STRIDES: [1, 2]
+        NUM_UPSAMPLE_FILTERS: [256, 256]
+        USE_CONV_FOR_NO_STRIDE: True
+
+    DENSE_HEAD:
+        CLASS_AGNOSTIC: False
+        NAME: TransFusionHead
+        USE_BIAS_BEFORE_NORM: False
+        NUM_PROPOSALS: 200
+        HIDDEN_CHANNEL: 128
+        NUM_CLASSES: 10
+        NUM_HEADS: 8
+        NMS_KERNEL_SIZE: 3
+        FFN_CHANNEL: 256
+        DROPOUT: 0.1
+        BN_MOMENTUM: 0.1
+        ACTIVATION: relu
+        NUM_HM_CONV: 2
+        SEPARATE_HEAD_CFG:
+            HEAD_ORDER: ['center', 'height', 'dim', 'rot', 'vel']
+            HEAD_DICT: {
+                'center': {'out_channels': 2, 'num_conv': 2},
+                'height': {'out_channels': 1, 'num_conv': 2},
+                'dim': {'out_channels': 3, 'num_conv': 2},
+                'rot': {'out_channels': 2, 'num_conv': 2},
+                'vel': {'out_channels': 2, 'num_conv': 2},
+            }
+        TARGET_ASSIGNER_CONFIG:
+            FEATURE_MAP_STRIDE: 8
+            DATASET: nuScenes
+            GAUSSIAN_OVERLAP: 0.1
+            MIN_RADIUS: 2
+            HUNGARIAN_ASSIGNER:
+                cls_cost: {'gamma': 2.0, 'alpha': 0.25, 'weight': 0.15}
+                reg_cost: {'weight': 0.25}
+                iou_cost: {'weight': 0.25}
+        LOSS_CONFIG:
+            LOSS_WEIGHTS: {
+                    'cls_weight': 1.0,
+                    'bbox_weight': 0.25,
+                    'hm_weight': 1.0,
+                    'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+                }
+            LOSS_CLS:
+                use_sigmoid: True
+                gamma: 2.0
+                alpha: 0.25
+        POST_PROCESSING:
+            SCORE_THRESH: 0.0
+            POST_CENTER_RANGE: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+
+    POST_PROCESSING:
+        RECALL_THRESH_LIST: [0.3, 0.5, 0.7]
+        SCORE_THRESH: 0.1
+        OUTPUT_RAW_SCORE: False
+        EVAL_METRIC: nuscenes
+
+# ================= 优化器 (TTA 专用) =================
+OPTIMIZATION:
+    BATCH_SIZE_PER_GPU: 2
+    NUM_EPOCHS: 1
+    
+    OPTIMIZER: adam_onecycle
+    LR: 0.00002
+    WEIGHT_DECAY: 0.01
+    MOMENTUM: 0.9
+    
+    MOMS: [0.95, 0.85]
+    PCT_START: 0.4
+    DIV_FACTOR: 10
+    DECAY_STEP_LIST: [35, 45]
+    LR_DECAY: 0.1
+    LR_CLIP: 0.0000001
+    LR_WARMUP: False
+    WARMUP_EPOCH: 1
+    GRAD_NORM_CLIP: 10
+
+# ================= MOS 核心参数 =================
+TTA:
+    ENABLED: True
+    METHOD: mos
+    ALPHA: 0.2
+    MATCH_THRESHOLD: 0.24
+
+    # 当前默认最优记录（S1）
+    # best ckpt: checkpoint_iter_10.pth
+    # best metric: NDS=0.4116, mAP=0.3580
+
+    FREEZE:
+        ENABLED: True
+        MODULES: ['image_backbone', 'neck']
+    
+    # 方案B：early-iter 优先，减少后期低价值评估开销
+    SAVE_CKPT: [0, 10, 20, 30, 40, 50, 100, 150, 200]
+    SAVE_CKPT_INTERVAL: 0
+    
+    MOS_SETTING:
+        AGGREGATE_START_CKPT: 10 
+        AGGREGATE_NUM: 3
+        BANK_START_CKPT: 0
+
+# ================= 自训练参数 =================
+SELF_TRAIN:
+    # 方案A（已固化）：S1 最优阈值，仅收紧 traffic_cone；其余类别回到安全版
+    SCORE_THRESH: [0.28, 0.28, 0.28, 0.20, 0.20, 0.24, 0.20, 0.18, 0.24, 0.34]
+    NEG_THRESH: [0.08, 0.08, 0.09, 0.05, 0.05, 0.06, 0.06, 0.05, 0.10, 0.14]
+
+    # A11: 前置伪标签质量过滤（按类别 Top-K 限流）
+    PS_FILTER:
+        ENABLED: False
+        DEFAULT_TOPK_PER_CLASS: 30
+        CLASS_TOPK:
+            pedestrian: 15
+            traffic_cone: 15
+            construction_vehicle: 20
+
+    # A12/A13 实验开关：最终回退到 A8 时保持关闭
+    ADAPTIVE_CAP:
+        ENABLED: False
+        TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+        BASE_TOPK: 24
+        HIGH_SCORE_TOPK: 35
+        HIGH_SCORE_THRESH: 0.40
+
+    # D1: 基于深度估计不确定性的伪标签过滤（仅对高噪类启用）
+    DEPTH_FILTER:
+        ENABLED: True
+        TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+        MODE: center_conf
+        CONF_TYPE: max_prob
+        CONF_THRESH: 0.25
+        CLASS_CONF_THRESH:
+            pedestrian: 0.24
+            traffic_cone: 0.34
+        MULTI_CAM_REDUCE: max
+
+    MEMORY_ENSEMBLE:
+        ENABLED: True
+        NAME: consistency_ensemble
+        IOU_THRESH: 0.1
+        MEMORY_VOTING:
+            ENABLED: True
+            IGNORE_THRESH: 1
+            RM_THRESH: 3
+    
+    UPDATE_PSEUDO_LABEL: [0]
+    UPDATE_PSEUDO_LABEL_INTERVAL: 1
+
+    SRC:
+        USE_DATA: False
+        USE_GRAD: False
+    TAR:
+        USE_DATA: True
+        LOSS_WEIGHT: 0.3
