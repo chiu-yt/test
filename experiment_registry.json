@@ -1,0 +1,25 @@
+[
+  {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/conflict_filter_v1_fix_nan/eval/eval_with_train||checkpoint_iter_10||best_summary",
+    "updated_at": "2026-04-16T21:33:37",
+    "source": "tools/train.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos_conflict_filter_v1_fix_nan",
+    "extra_tag": "conflict_filter_v1_fix_nan",
+    "eval_tag": null,
+    "note": "fix non-finite pseudo boxes and skip non-finite TTA loss steps",
+    "promote_to_agents": false,
+    "record_mode": "best_summary",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/conflict_filter_v1_fix_nan",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/conflict_filter_v1_fix_nan/eval/eval_with_train",
+    "ckpt_type": "iter",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_iter_10",
+    "metrics": {
+      "NDS": 0.41232280714866665,
+      "mAP": 0.3576780066244882
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/conflict_filter_v1_fix_nan/eval/eval_with_train/iter_10/val/final_result/data/metrics_summary.json"
+  }
+]

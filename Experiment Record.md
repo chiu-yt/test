@@ -3,7 +3,10 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
-- No auto-recorded experiment runs yet. Run `tools/train.py` or `tools/test.py` to populate this section.
+- `2026-04-16 21:33:37` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `conflict_filter_v1_fix_nan` `best_iter=10` `NDS=0.4123 mAP=0.3577 promoted=no`
+  - exp: `bevfusion_mos_conflict_filter_v1_fix_nan`
+  - note: fix non-finite pseudo boxes and skip non-finite TTA loss steps
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/conflict_filter_v1_fix_nan/eval/eval_with_train`
 <!-- AUTO-EXPERIMENT-LOG:END -->
 
 ## 1. 研究背景与问题定义
