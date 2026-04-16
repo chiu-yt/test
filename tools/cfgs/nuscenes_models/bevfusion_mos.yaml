@@ -223,6 +223,8 @@ TTA:
         AGGREGATE_START_CKPT: 10 
         AGGREGATE_NUM: 3
         BANK_START_CKPT: 0
+        CKPT_SOURCES: ['iter', 'epoch']
+        RESERVE_EPOCH_CKPTS: 1
 
 # ================= 自训练参数 =================
 SELF_TRAIN:
@@ -258,6 +260,20 @@ SELF_TRAIN:
             pedestrian: 0.24
             traffic_cone: 0.34
         MULTI_CAM_REDUCE: max
+
+    CONFLICT_FILTER:
+        ENABLED: True
+        TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+        SAMPLE_MODE: center_corners
+        MIN_VISIBLE_POINTS: 3
+        MIN_CAM_COVERAGE: 0.25
+        MULTI_CAM_REDUCE: max
+        CLASS_SCORE_THRESH:
+            pedestrian: 0.24
+            traffic_cone: 0.34
+        CLASS_DEPTH_CONF_THRESH:
+            pedestrian: 0.24
+            traffic_cone: 0.34
 
     MEMORY_ENSEMBLE:
         ENABLED: True

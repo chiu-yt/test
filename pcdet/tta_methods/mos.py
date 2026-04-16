@@ -12,7 +12,7 @@ from scipy.optimize import linear_sum_assignment
 
 from pcdet.config import cfg
 from pcdet.models import load_data_to_gpu, build_network
-from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils
+from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils, box_utils
 from pcdet.utils.tta_utils import TTA_augmentation
 from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
 
@@ -119,15 +119,7 @@ class MOS(object):
 
         super_model = None
         if self.tta_cfg.METHOD == 'mos' and start_ckpt <= self.total_samples_seen and ckpt_dir:
-            # 与 MOS-main 对齐：aggregation 只使用在线 checkpoint_iter_*
-            model_path_list = [
-                p for p in glob.glob(os.path.join(ckpt_dir, '*checkpoint_iter_*.pth'))
-                if extract_iter(p) >= 0
-            ]
-            
-            model_path_list.sort(key=extract_iter)
-            # Take latest N checkpoints
-            model_path_list = model_path_list[-min(len(model_path_list), self.tta_cfg.MOS_SETTING.AGGREGATE_NUM):]
+            model_path_list = self._collect_aggregation_ckpts(ckpt_dir)
 
             if len(model_path_list) >= 3:
                 super_model = self._perform_aggregation(model_path_list, batch_dict, pred_dicts)
@@ -402,6 +394,10 @@ class MOS(object):
 
         for path in model_path_list:
             try:
+                if self.temp_model_shell is None:
+                    return None
+                temp_model_shell = self.temp_model_shell
+
                 # Load state dict (cached)
                 if path in self.ckpt_ram_cache:
                     state_dict = self.ckpt_ram_cache[path]
@@ -413,13 +409,16 @@ class MOS(object):
                     self.ckpt_ram_cache[path] = state_dict
 
                 # Load into shell
-                self.temp_model_shell.load_state_dict(state_dict, strict=False)
+                temp_model_shell.load_state_dict(state_dict, strict=False)
 
                 # Inference current checkpoint model
                 with torch.no_grad():
-                    p_dicts, _ = self.temp_model_shell(batch_dict)
+                    p_dicts, _ = temp_model_shell(batch_dict)
 
                 feat_vec = self._extract_aggregation_feature(batch_dict, p_dicts, device=device)
+                if feat_vec is None:
+                    fail_cnt += 1
+                    continue
                 feat_vec_list.append(feat_vec.detach().cpu())
 
                 cur_boxes, cur_scores = [], []
@@ -626,6 +625,75 @@ class MOS(object):
             return fallback
         return None
 
+    def _collect_aggregation_ckpts(self, ckpt_dir):
+        agg_cfg = self.tta_cfg.get('MOS_SETTING', None)
+        if agg_cfg is None:
+            return []
+
+        agg_num = int(agg_cfg.get('AGGREGATE_NUM', 3))
+        if agg_num <= 0:
+            return []
+
+        raw_sources = agg_cfg.get('CKPT_SOURCES', ['iter'])
+        if isinstance(raw_sources, str):
+            ckpt_sources = [raw_sources]
+        else:
+            ckpt_sources = list(raw_sources)
+
+        ckpt_sources = [str(x).lower() for x in ckpt_sources]
+        reserve_epoch = int(agg_cfg.get('RESERVE_EPOCH_CKPTS', 0))
+
+        iter_paths, epoch_paths = [], []
+        if 'iter' in ckpt_sources:
+            iter_paths = [
+                p for p in glob.glob(os.path.join(ckpt_dir, '*checkpoint_iter_*.pth'))
+                if extract_iter(p) >= 0
+            ]
+            iter_paths.sort(key=extract_iter)
+
+        if 'epoch' in ckpt_sources:
+            epoch_paths = [
+                p for p in glob.glob(os.path.join(ckpt_dir, '*checkpoint_epoch_*.pth'))
+                if extract_iter(p) >= 0
+            ]
+            epoch_paths.sort(key=extract_iter)
+
+        selected = []
+        if epoch_paths and reserve_epoch > 0:
+            selected.extend(epoch_paths[-min(len(epoch_paths), reserve_epoch):])
+
+        iter_budget = max(agg_num - len(selected), 0)
+        if iter_paths and iter_budget > 0:
+            selected.extend(iter_paths[-min(len(iter_paths), iter_budget):])
+
+        if len(selected) < agg_num:
+            merged_candidates = []
+            if iter_paths:
+                merged_candidates.extend(iter_paths)
+            if epoch_paths:
+                merged_candidates.extend(epoch_paths)
+
+            merged_candidates.sort(key=os.path.getmtime)
+            existing = set(selected)
+            for path in reversed(merged_candidates):
+                if path in existing:
+                    continue
+                selected.append(path)
+                existing.add(path)
+                if len(selected) >= agg_num:
+                    break
+
+        deduped = []
+        seen = set()
+        for path in selected:
+            if path in seen:
+                continue
+            seen.add(path)
+            deduped.append(path)
+
+        deduped.sort(key=lambda p: (extract_iter(p), os.path.getmtime(p)))
+        return deduped[-min(len(deduped), agg_num):]
+
 # ================= Helper Functions =================
 
 def extract_iter(path):
@@ -718,6 +786,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
         fid = raw_fid.item() if hasattr(raw_fid, 'item') else raw_fid
         if fid in NEW_PSEUDO_LABELS:
             NEW_PSEUDO_LABELS[fid] = _apply_depth_uncertainty_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
+            NEW_PSEUDO_LABELS[fid] = _apply_multimodal_conflict_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
 
     # A11: 前置质量过滤（按类别 Top-K 限流，重点约束长尾高噪类）
     frame_ids = input_dict.get('frame_id', [])
@@ -727,7 +796,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             NEW_PSEUDO_LABELS[fid] = _apply_class_topk_filter(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_adaptive_noisy_class_cap(NEW_PSEUDO_LABELS[fid])
 
-    mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', None)
+    mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', {})
     use_mem = bool(mem_cfg is not None and mem_cfg.get('ENABLED', False) and need_update)
     if not use_mem:
         # 不做融合时，同步覆盖历史缓存
@@ -910,6 +979,165 @@ def _apply_depth_uncertainty_filter(gt_infos, batch_dict, batch_index):
             depth_conf = cam_conf.mean()
 
         if float(depth_conf.item()) < cur_conf_thresh:
+            keep_mask[global_idx] = False
+
+    if keep_mask.all():
+        return gt_infos
+
+    filtered_infos = {
+        'gt_boxes': gt_boxes[keep_mask],
+        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
+        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
+        'memory_counter': gt_infos['memory_counter'][keep_mask]
+    }
+    return filtered_infos
+
+
+def _apply_multimodal_conflict_filter(gt_infos, batch_dict, batch_index):
+    """
+    对高噪类别增加一个更保守的多模态冲突过滤：
+    只有在“检测分数偏低”且“多点投影深度支持偏弱”同时成立时才移除框。
+    这样比单点 center depth filter 更稳，也不会把相机暂时缺失支持的框一刀切删掉。
+    """
+    filter_cfg = cfg.SELF_TRAIN.get('CONFLICT_FILTER', None)
+    if filter_cfg is None or not filter_cfg.get('ENABLED', False):
+        return gt_infos
+
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    if gt_boxes is None or len(gt_boxes) == 0:
+        return gt_infos
+
+    depth_conf_map = batch_dict.get('depth_conf_map', None)
+    lidar2image = batch_dict.get('lidar2image', None)
+    img_aug_matrix = batch_dict.get('img_aug_matrix', None)
+    lidar_aug_matrix = batch_dict.get('lidar_aug_matrix', None)
+    if depth_conf_map is None or lidar2image is None or img_aug_matrix is None or lidar_aug_matrix is None:
+        return gt_infos
+
+    target_names = set(filter_cfg.get('TARGET_CLASSES', ['pedestrian', 'traffic_cone']))
+    target_ids = [i + 1 for i, name in enumerate(cfg.CLASS_NAMES) if name in target_names]
+    if len(target_ids) == 0:
+        return gt_infos
+
+    labels = np.abs(gt_boxes[:, 7]).astype(np.int64)
+    candidate_inds = np.where(np.isin(labels, np.array(target_ids, dtype=np.int64)))[0]
+    if candidate_inds.size == 0:
+        return gt_infos
+
+    sample_mode = str(filter_cfg.get('SAMPLE_MODE', 'center_corners')).lower()
+    min_visible_points = int(filter_cfg.get('MIN_VISIBLE_POINTS', 3))
+    min_cam_coverage = float(filter_cfg.get('MIN_CAM_COVERAGE', 0.25))
+    multi_cam_reduce = filter_cfg.get('MULTI_CAM_REDUCE', 'max')
+    class_score_thresh_cfg = filter_cfg.get('CLASS_SCORE_THRESH', {})
+    class_depth_thresh_cfg = filter_cfg.get('CLASS_DEPTH_CONF_THRESH', {})
+    default_depth_thresh = float(filter_cfg.get('DEPTH_CONF_THRESH', 0.25))
+
+    depth_filter_cfg = cfg.SELF_TRAIN.get('DEPTH_FILTER', None)
+    if depth_filter_cfg is not None:
+        default_depth_thresh = float(depth_filter_cfg.get('CONF_THRESH', default_depth_thresh))
+
+    device = depth_conf_map.device if isinstance(depth_conf_map, torch.Tensor) else torch.device('cpu')
+    boxes = torch.as_tensor(gt_boxes[candidate_inds, :7], device=device, dtype=torch.float32)
+    centers = boxes[:, :3].unsqueeze(1)
+    sample_points = centers
+    if sample_mode in ['center_corners', 'corners', 'center_bottom_corners']:
+        corners = box_utils.boxes_to_corners_3d(boxes)
+        if sample_mode == 'center_bottom_corners':
+            corners = corners[:, :4, :]
+        sample_points = torch.cat([sample_points, corners], dim=1)
+
+    num_boxes, num_samples = sample_points.shape[:2]
+    flat_points = sample_points.reshape(-1, 3).transpose(1, 0)
+
+    cur_depth_conf = depth_conf_map[batch_index]
+    cur_lidar2image = lidar2image[batch_index].to(torch.float32)
+    cur_img_aug_matrix = img_aug_matrix[batch_index].to(torch.float32)
+    cur_lidar_aug_matrix = lidar_aug_matrix[batch_index].to(torch.float32)
+
+    coords = flat_points.clone()
+    coords -= cur_lidar_aug_matrix[:3, 3].reshape(3, 1)
+    coords = torch.inverse(cur_lidar_aug_matrix[:3, :3]).matmul(coords)
+    coords = cur_lidar2image[:, :3, :3].matmul(coords.unsqueeze(0))
+    coords += cur_lidar2image[:, :3, 3].reshape(-1, 3, 1)
+
+    raw_depth = coords[:, 2, :].clone()
+    coords[:, 2, :] = torch.clamp(coords[:, 2, :], 1e-5, 1e5)
+    coords[:, :2, :] /= coords[:, 2:3, :]
+    coords = cur_img_aug_matrix[:, :3, :3].matmul(coords)
+    coords += cur_img_aug_matrix[:, :3, 3].reshape(-1, 3, 1)
+    coords = coords[:, :2, :].transpose(1, 2)
+    coords = coords[..., [1, 0]].reshape(coords.shape[0], num_boxes, num_samples, 2)
+    raw_depth = raw_depth.reshape(raw_depth.shape[0], num_boxes, num_samples)
+
+    if 'camera_imgs' in batch_dict:
+        img_h, img_w = batch_dict['camera_imgs'].shape[-2:]
+    else:
+        img_h, img_w = cfg.MODEL.VTRANSFORM.IMAGE_SIZE
+    feat_h, feat_w = cur_depth_conf.shape[-2:]
+
+    on_img = (
+        (raw_depth > 1e-5)
+        & (coords[..., 0] >= 0) & (coords[..., 0] < img_h)
+        & (coords[..., 1] >= 0) & (coords[..., 1] < img_w)
+    )
+
+    feat_y = torch.clamp((coords[..., 0] / max(float(img_h), 1.0) * feat_h).long(), min=0, max=feat_h - 1)
+    feat_x = torch.clamp((coords[..., 1] / max(float(img_w), 1.0) * feat_w).long(), min=0, max=feat_w - 1)
+
+    keep_mask = np.ones(gt_boxes.shape[0], dtype=bool)
+    default_score_thresh_arr = cfg.SELF_TRAIN.get('SCORE_THRESH', None)
+    depth_class_cfg = depth_filter_cfg.get('CLASS_CONF_THRESH', {}) if depth_filter_cfg is not None else {}
+
+    for local_idx, global_idx in enumerate(candidate_inds.tolist()):
+        cls_id = int(labels[global_idx])
+        cls_name = cfg.CLASS_NAMES[cls_id - 1] if 1 <= cls_id <= len(cfg.CLASS_NAMES) else None
+        if cls_name is None:
+            continue
+
+        score_thresh = class_score_thresh_cfg.get(cls_name, None)
+        if score_thresh is None and default_score_thresh_arr is not None and 1 <= cls_id <= len(default_score_thresh_arr):
+            score_thresh = float(default_score_thresh_arr[cls_id - 1])
+        if score_thresh is None:
+            score_thresh = 0.25
+
+        depth_thresh = class_depth_thresh_cfg.get(cls_name, depth_class_cfg.get(cls_name, default_depth_thresh))
+        pred_score = float(gt_boxes[global_idx, 8]) if gt_boxes.shape[1] > 8 else 0.0
+
+        cam_mask = on_img[:, local_idx, :]
+        cam_visible_counts = cam_mask.sum(dim=1)
+        if cam_visible_counts.max().item() <= 0:
+            continue
+
+        valid_cam_scores = []
+        for cam_idx in range(cam_mask.shape[0]):
+            visible_count = int(cam_visible_counts[cam_idx].item())
+            if visible_count < min_visible_points:
+                continue
+
+            coverage = float(visible_count) / float(max(num_samples, 1))
+            if coverage < min_cam_coverage:
+                continue
+
+            cur_mask = cam_mask[cam_idx]
+            sampled_conf = cur_depth_conf[cam_idx, feat_y[cam_idx, local_idx, cur_mask], feat_x[cam_idx, local_idx, cur_mask]]
+            if sampled_conf.numel() == 0:
+                continue
+
+            if multi_cam_reduce == 'mean':
+                valid_cam_scores.append(sampled_conf.mean())
+            else:
+                valid_cam_scores.append(sampled_conf.max())
+
+        if len(valid_cam_scores) == 0:
+            continue
+
+        valid_cam_scores = torch.stack(valid_cam_scores)
+        if multi_cam_reduce == 'mean':
+            depth_conf = valid_cam_scores.mean()
+        else:
+            depth_conf = valid_cam_scores.max()
+
+        if pred_score < float(score_thresh) and float(depth_conf.item()) < float(depth_thresh):
             keep_mask[global_idx] = False
 
     if keep_mask.all():
