@@ -245,6 +245,8 @@ class TransFusionHead(nn.Module):
             for i in range(len(gt_bboxes)):
                 # 仅保留尺寸合法且类别索引合法的框，避免 heatmap 索引越界触发 CUDA assert
                 if (
+                    torch.isfinite(gt_bboxes[i]).all()
+                    and
                     gt_bboxes[i][3] > 0 and gt_bboxes[i][4] > 0
                     and gt_labels[i] >= 0 and gt_labels[i] < self.num_classes
                 ):

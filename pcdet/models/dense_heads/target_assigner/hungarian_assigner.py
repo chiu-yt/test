@@ -113,6 +113,7 @@ class HungarianAssigner3D:
         cost = cls_cost + reg_cost + iou_cost
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
+        cost = torch.nan_to_num(cost, nan=1e8, posinf=1e8, neginf=-1e8)
         cost = cost.detach().cpu()
         matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
         matched_row_inds = torch.from_numpy(matched_row_inds).to(bboxes.device)

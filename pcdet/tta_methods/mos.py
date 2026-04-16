@@ -191,6 +191,14 @@ class MOS(object):
         disp_dict['loss_w'] = f"{float(final_loss.detach().item()):.4f}" if isinstance(final_loss, torch.Tensor) else f"{float(final_loss):.4f}"
         disp_dict['tar_w'] = f"{tar_loss_weight:.2f}"
 
+        if isinstance(final_loss, torch.Tensor) and (not torch.isfinite(final_loss)):
+            if isinstance(tb_dict, dict):
+                tb_dict['loss_non_finite_skip'] = 1.0
+            disp_dict['nan_skip'] = '1'
+            if self.rank == 0:
+                self.logger.warning('[MM-MOS] Non-finite loss detected, skip backward for this step')
+            return loss.detach().new_zeros(()), tb_dict, disp_dict
+
         # 仅展示长尾关键类（construction_vehicle, bus, trailer, traffic_cone）
         tail_names = ['construction_vehicle', 'bus', 'trailer', 'traffic_cone']
         gt_tail = '/'.join([str(gt_hist.get(n, 0)) for n in tail_names])
@@ -795,6 +803,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
         if fid in NEW_PSEUDO_LABELS:
             NEW_PSEUDO_LABELS[fid] = _apply_class_topk_filter(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_adaptive_noisy_class_cap(NEW_PSEUDO_LABELS[fid])
+            NEW_PSEUDO_LABELS[fid] = _apply_nan_box_filter(NEW_PSEUDO_LABELS[fid])
 
     mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', {})
     use_mem = bool(mem_cfg is not None and mem_cfg.get('ENABLED', False) and need_update)
@@ -820,10 +829,11 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             merged = memory_ensemble_utils.memory_ensemble(
                 PSEUDO_LABELS[fid], cur_infos, mem_cfg, ensemble_func
             )
+            merged = _apply_nan_box_filter(merged)
             NEW_PSEUDO_LABELS[fid] = merged
             PSEUDO_LABELS[fid] = merged
         else:
-            PSEUDO_LABELS[fid] = cur_infos
+            PSEUDO_LABELS[fid] = _apply_nan_box_filter(cur_infos)
 
 
 def _apply_class_topk_filter(gt_infos):
@@ -1148,6 +1158,27 @@ def _apply_multimodal_conflict_filter(gt_infos, batch_dict, batch_index):
         'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
         'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
         'memory_counter': gt_infos['memory_counter'][keep_mask]
+    }
+    return filtered_infos
+
+
+def _apply_nan_box_filter(gt_infos):
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    if gt_boxes is None or len(gt_boxes) == 0:
+        return gt_infos
+
+    finite_mask = np.isfinite(gt_boxes).all(axis=1)
+    if gt_boxes.shape[1] >= 6:
+        finite_mask = finite_mask & (gt_boxes[:, 3] > 0) & (gt_boxes[:, 4] > 0) & (gt_boxes[:, 5] > 0)
+
+    if finite_mask.all():
+        return gt_infos
+
+    filtered_infos = {
+        'gt_boxes': gt_boxes[finite_mask],
+        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][finite_mask],
+        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][finite_mask],
+        'memory_counter': gt_infos['memory_counter'][finite_mask]
     }
     return filtered_infos
 

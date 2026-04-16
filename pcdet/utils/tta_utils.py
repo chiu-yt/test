@@ -153,6 +153,17 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
         # 4.1) 读取增强后的 boxes
         aug_boxes = _ensure_gt_boxes_10_np(single_dict['gt_boxes'])
 
+        if aug_boxes is not None and aug_boxes.shape[0] > 0:
+            try:
+                finite_mask = np.isfinite(aug_boxes).all(axis=1)
+                if aug_boxes.shape[1] >= 6:
+                    finite_mask = finite_mask & (aug_boxes[:, 3] > 0) & (aug_boxes[:, 4] > 0) & (aug_boxes[:, 5] > 0)
+                if isinstance(finite_mask, np.ndarray) and finite_mask.shape[0] == aug_boxes.shape[0]:
+                    aug_boxes = aug_boxes.copy()
+                    aug_boxes[~finite_mask] = 0
+            except Exception:
+                pass
+
         # 显式做一次 range mask（zero-out 方式）
         if point_cloud_range is not None and aug_boxes is not None and aug_boxes.shape[0] > 0:
             try:
