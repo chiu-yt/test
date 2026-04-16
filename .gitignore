@@ -49,3 +49,7 @@ temp/
 *.zip
 *.tar
 *.tar.gz
+
+# Local agent / experiment notes
+AGENTS.md
+Experiment Record.md
