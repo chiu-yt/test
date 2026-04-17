@@ -1,8 +1,79 @@
 import numpy as np
 import math
 import copy
+from PIL import Image
 from ...utils import common_utils
 from ...utils import box_utils
+
+
+def apply_lidar_fog(points, severity=1, rng=None):
+    """
+    Simple LiDAR fog simulation for point clouds (N, C>=4).
+    - range-dependent point dropout
+    - xyz jitter
+    - intensity attenuation
+    """
+    if points is None or len(points) == 0:
+        return points
+
+    severity = int(np.clip(severity, 1, 5))
+    rng = np.random if rng is None else rng
+
+    pts = points.copy()
+    dist = np.linalg.norm(pts[:, :3], axis=1)
+
+    beta = [0.003, 0.006, 0.012, 0.020, 0.030][severity - 1]
+    transmittance = np.exp(-beta * dist)
+    keep_prob = np.clip(transmittance, 0.15, 1.0)
+    keep_mask = rng.rand(pts.shape[0]) < keep_prob
+
+    if keep_mask.sum() < min(32, pts.shape[0]):
+        keep_mask[:] = False
+        keep_idx = rng.choice(pts.shape[0], size=min(32, pts.shape[0]), replace=False)
+        keep_mask[keep_idx] = True
+
+    pts = pts[keep_mask]
+    trans_keep = transmittance[keep_mask]
+
+    jitter_std = [0.003, 0.006, 0.010, 0.015, 0.020][severity - 1]
+    pts[:, :3] += rng.normal(0.0, jitter_std, size=(pts.shape[0], 3)).astype(pts.dtype)
+
+    if pts.shape[1] > 3:
+        intensity_scale = np.clip(trans_keep, 0.05, 1.0).astype(pts.dtype)
+        pts[:, 3] = pts[:, 3] * intensity_scale
+
+    return pts.astype(points.dtype, copy=False)
+
+
+def apply_image_fog_single(image, severity=1):
+    """
+    Simple image fog simulation for PIL image.
+    """
+    severity = int(np.clip(severity, 1, 5))
+    if not isinstance(image, Image.Image):
+        image = Image.fromarray(np.asarray(image))
+
+    img = image.convert('RGB')
+    arr = np.asarray(img, dtype=np.float32)
+    h, _, _ = arr.shape
+
+    alpha_base = [0.10, 0.16, 0.22, 0.30, 0.38][severity - 1]
+    y = np.linspace(0.0, 1.0, h, dtype=np.float32).reshape(h, 1, 1)
+    # more fog in far field (upper image region)
+    depth_weight = 0.7 + 0.3 * (1.0 - y)
+    alpha = np.clip(alpha_base * depth_weight, 0.0, 0.95)
+
+    fog_color = np.full_like(arr, 255.0)
+    out = arr * (1.0 - alpha) + fog_color * alpha
+    out = (out - 127.5) * (1.0 - alpha_base * 0.45) + 127.5
+    out = np.clip(out, 0.0, 255.0).astype(np.uint8)
+    return Image.fromarray(out, mode='RGB')
+
+
+def apply_image_fog(images, severity=1):
+    if images is None:
+        return images
+    return [apply_image_fog_single(img, severity=severity) for img in images]
 
 
 def random_flip_along_x(gt_boxes, points, return_flip=False, enable=None):

@@ -24,6 +24,17 @@ DATA_CONFIG:
             RESIZE_LIM_TRAIN: [0.38, 0.55]
             RESIZE_LIM_TEST: [0.48, 0.48]
 
+    # Adverse-condition benchmark switch (source-only first)
+    CORRUPTION:
+        ENABLED: False
+        APPLY_IN: ['test']
+        LIDAR_FOG:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_FOG:
+            ENABLED: False
+            SEVERITY: 1
+
     DATA_AUGMENTOR:
         DISABLE_AUG_LIST: ['placeholder']
         AUG_CONFIG_LIST:

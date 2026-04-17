@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...utils import common_utils
+from ..augmentor import augmentor_utils
 from ..dataset import DatasetTemplate
 from pyquaternion import Quaternion
 from PIL import Image
@@ -25,6 +26,27 @@ class NuScenesDataset(DatasetTemplate):
             self.camera_image_config = self.camera_config.IMAGE
         else:
             self.use_camera = False
+
+        # Optional corruption config for benchmark evaluation
+        self.corruption_cfg = self.dataset_cfg.get('CORRUPTION', None)
+        self.enable_corruption = bool(self.corruption_cfg is not None and self.corruption_cfg.get('ENABLED', False))
+
+        if self.enable_corruption:
+            apply_in = self.corruption_cfg.get('APPLY_IN', ['test'])
+            if isinstance(apply_in, str):
+                apply_in = [apply_in]
+            self.corruption_apply_in = set([str(x).lower() for x in apply_in])
+            self.lidar_fog_cfg = self.corruption_cfg.get('LIDAR_FOG', {})
+            self.image_fog_cfg = self.corruption_cfg.get('IMAGE_FOG', {})
+            if self.logger is not None:
+                self.logger.info(
+                    'NuScenes corruption enabled | apply_in=%s | lidar_fog=%s | image_fog=%s'
+                    % (list(self.corruption_apply_in), bool(self.lidar_fog_cfg.get('ENABLED', False)), bool(self.image_fog_cfg.get('ENABLED', False)))
+                )
+        else:
+            self.corruption_apply_in = set()
+            self.lidar_fog_cfg = {}
+            self.image_fog_cfg = {}
 
         self.include_nuscenes_data(self.mode)
         if self.training and self.dataset_cfg.get('BALANCED_RESAMPLING', False):
@@ -200,6 +222,10 @@ class NuScenesDataset(DatasetTemplate):
         images = []
         for name in filename:
             images.append(Image.open(str(self.root_path / name)))
+
+        if self._use_corruption() and self.image_fog_cfg.get('ENABLED', False):
+            severity = int(self.image_fog_cfg.get('SEVERITY', 1))
+            images = augmentor_utils.apply_image_fog(images, severity=severity)
         
         input_dict["camera_imgs"] = images
         input_dict["ori_shape"] = images[0].size
@@ -215,12 +241,21 @@ class NuScenesDataset(DatasetTemplate):
 
         return len(self.infos)
 
+    def _use_corruption(self):
+        if not self.enable_corruption:
+            return False
+        return self.mode.lower() in self.corruption_apply_in
+
     def __getitem__(self, index):
         if self._merge_all_iters_to_one_epoch:
             index = index % len(self.infos)
 
         info = copy.deepcopy(self.infos[index])
         points = self.get_lidar_with_sweeps(index, max_sweeps=self.dataset_cfg.MAX_SWEEPS)
+
+        if self._use_corruption() and self.lidar_fog_cfg.get('ENABLED', False):
+            severity = int(self.lidar_fog_cfg.get('SEVERITY', 1))
+            points = augmentor_utils.apply_lidar_fog(points, severity=severity)
 
         input_dict = {
             'points': points,
