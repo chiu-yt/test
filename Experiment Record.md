@@ -3,6 +3,15 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
+- `2026-04-18 12:59:00` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_lidar_s1` `best_epoch=10` `NDS=0.4086 mAP=0.3572 promoted=no`
+  - exp: `bevfusion_mos/fog_image_lidar_s1`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s1/eval/epoch_10/val/fog_image_lidar_s1`
+- `2026-04-18 12:51:10` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_s1` `best_epoch=10` `NDS=0.4086 mAP=0.3593 promoted=no`
+  - exp: `bevfusion_mos/fog_image_s1`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s1/eval/epoch_10/val/fog_image_s1`
+- `2026-04-18 12:35:30` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_lidar_s1` `best_epoch=10` `NDS=0.4130 mAP=0.3598 promoted=no`
+  - exp: `bevfusion_mos/fog_lidar_s1`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_lidar_s1/eval/epoch_10/val/fog_lidar_s1`
 - `2026-04-16 21:33:37` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `conflict_filter_v1_fix_nan` `best_iter=10` `NDS=0.4123 mAP=0.3577 promoted=no`
   - exp: `bevfusion_mos_conflict_filter_v1_fix_nan`
   - note: fix non-finite pseudo boxes and skip non-finite TTA loss steps

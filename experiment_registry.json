@@ -1,5 +1,74 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s1/eval/epoch_10/val/fog_image_lidar_s1||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-04-18T12:59:00",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/fog_image_lidar_s1",
+    "extra_tag": "fog_image_lidar_s1",
+    "eval_tag": "fog_image_lidar_s1",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s1",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s1/eval/epoch_10/val/fog_image_lidar_s1",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.40862115392792286,
+      "mAP": 0.35717663179698744
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s1/eval/epoch_10/val/fog_image_lidar_s1/final_result/data/metrics_summary.json"
+  },
+  {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s1/eval/epoch_10/val/fog_image_s1||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-04-18T12:51:10",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/fog_image_s1",
+    "extra_tag": "fog_image_s1",
+    "eval_tag": "fog_image_s1",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s1",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s1/eval/epoch_10/val/fog_image_s1",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.40857962202849396,
+      "mAP": 0.35929174014634546
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s1/eval/epoch_10/val/fog_image_s1/final_result/data/metrics_summary.json"
+  },
+  {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_lidar_s1/eval/epoch_10/val/fog_lidar_s1||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-04-18T12:35:30",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/fog_lidar_s1",
+    "extra_tag": "fog_lidar_s1",
+    "eval_tag": "fog_lidar_s1",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_lidar_s1",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_lidar_s1/eval/epoch_10/val/fog_lidar_s1",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.4129644224698648,
+      "mAP": 0.35978105149227746
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_lidar_s1/eval/epoch_10/val/fog_lidar_s1/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/conflict_filter_v1_fix_nan/eval/eval_with_train||checkpoint_iter_10||best_summary",
     "updated_at": "2026-04-16T21:33:37",
     "source": "tools/train.py",

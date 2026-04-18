@@ -26,13 +26,13 @@ DATA_CONFIG:
 
     # Adverse-condition benchmark switch (source-only first)
     CORRUPTION:
-        ENABLED: False
+        ENABLED: True
         APPLY_IN: ['test']
         LIDAR_FOG:
-            ENABLED: False
+            ENABLED: True
             SEVERITY: 1
         IMAGE_FOG:
-            ENABLED: False
+            ENABLED: True
             SEVERITY: 1
 
     DATA_AUGMENTOR:
