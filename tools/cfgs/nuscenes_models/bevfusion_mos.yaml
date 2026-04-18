@@ -5,14 +5,14 @@ CLASS_NAMES: ['car','truck', 'construction_vehicle', 'bus', 'trailer',
 DATA_CONFIG:
     _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
     
-    # Night 目标域数据
+    # Full nuScenes val target-domain benchmark
     DATA_SPLIT: {
         'train': val,
         'test': val
     }
     INFO_PATH: {
-        'train': [nuscenes_infos_10sweeps_val_night.pkl],
-        'test': [nuscenes_infos_10sweeps_val_night.pkl],
+        'train': [nuscenes_infos_10sweeps_val.pkl],
+        'test': [nuscenes_infos_10sweeps_val.pkl],
     }
 
     BALANCED_RESAMPLING: False 
@@ -26,13 +26,13 @@ DATA_CONFIG:
 
     # Adverse-condition benchmark switch (source-only first)
     CORRUPTION:
-        ENABLED: True
+        ENABLED: False
         APPLY_IN: ['test']
         LIDAR_FOG:
-            ENABLED: True
+            ENABLED: False
             SEVERITY: 1
         IMAGE_FOG:
-            ENABLED: True
+            ENABLED: False
             SEVERITY: 1
 
     DATA_AUGMENTOR:
