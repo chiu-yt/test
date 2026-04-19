@@ -446,7 +446,145 @@
 
 ---
 
-## 14. 当前最推荐的主结论
+## 14. 最新 full-val fog benchmark 结论（已完成）
+
+### 14.1 已有结果摘要
+
+基于 `clean_fullval` 与 `fog s1/s3/s5 fullval` 的 source-only 实验，当前已经得到以下关键事实：
+
+- `clean_fullval`: `NDS=0.6736`, `mAP=0.6421`
+- `fog_lidar_s1_fullval`: `NDS=0.6728`, `mAP=0.6409`
+- `fog_image_s1_fullval`: `NDS=0.6715`, `mAP=0.6393`
+- `fog_image_lidar_s1_fullval`: `NDS=0.6705`, `mAP=0.6381`
+
+- `fog_lidar_s3_fullval`: `NDS=0.6647`, `mAP=0.6286`
+- `fog_image_s3_fullval`: `NDS=0.6655`, `mAP=0.6278`
+- `fog_image_lidar_s3_fullval`: `NDS=0.6563`, `mAP=0.6134`
+
+- `fog_lidar_s5_fullval`: `NDS=0.6320`, `mAP=0.5775`
+- `fog_image_s5_fullval`: `NDS=0.6516`, `mAP=0.6025`
+- `fog_image_lidar_s5_fullval`: `NDS=0.6017`, `mAP=0.5213`
+
+### 14.2 已验证的直接结论
+
+这些结果已经足够支持下面几个判断：
+
+1. **`fog s1` 太弱，不适合作为后续 TTA 主 benchmark**
+   - 相比 clean，`s1` 只带来极小退化；
+   - 这种设置更适合作为 sanity check，而不是主表核心。
+
+2. **`fog s3` 是当前最合适的主开发 benchmark**
+   - 退化已经足够明显；
+   - 但仍未极端到让实验完全不稳定；
+   - 最适合后续方法开发与 ablation。
+
+3. **`fog s5` 适合作为强退化确认 benchmark**
+   - 在 `s5` 下，性能退化明显；
+   - 更适合作为方法泛化与强鲁棒性验证，而不是第一开发集。
+
+4. **强 fog 下，多模态融合会比单模态更脆弱**
+   - `s3` 下 dual 明显差于 lidar-only 与 image-only；
+   - `s5` 下 dual 的退化最严重；
+   - 这说明 adverse condition 下的主问题不是“输入坏了”这么简单，而是**跨模态冲突导致 fused pseudo labels 不可靠**。
+
+### 14.3 这组 benchmark 的真正意义
+
+这一步最重要的贡献，不是单纯补齐了 benchmark，而是帮助当前项目确认了：
+
+> **后续论文与方法创新，应该聚焦“跨模态冲突感知的伪标签可靠性建模”，而不是继续做更细的阈值调参与 aggregation 微调。**
+
+也就是说，这些 fog benchmark 已经把主问题从“是否存在 adverse shift”推进到了：
+
+- adverse shift 下，哪一类 corruption 能作为主 benchmark；
+- 多模态融合是否总是有利；
+- 未来最值得投入的方法方向是什么。
+
+---
+
+## 15. 下一阶段方法主线（基于已有 benchmark 结果）
+
+### 15.1 当前最值得做的大方向
+
+下一阶段不建议继续优先做：
+
+- 更细的 fog 阈值调节；
+- 更复杂的 aggregation 细节；
+- 把 `s1` 再扩展成更多弱 corruption 对照。
+
+当前最值得做的方法主线应为：
+
+> **Cross-modal conflict-aware pseudo-label reliability modeling for multimodal 3D TTA**
+
+也就是：
+
+- 不默认信任 fused pseudo labels；
+- 在 adverse condition 下显式判断 image 与 lidar 证据是否冲突；
+- 当冲突强时，对伪标签做降权、筛除或可靠性重分配。
+
+### 15.2 一大创新 + 两个小创新的建议结构
+
+#### 大创新
+
+**跨模态冲突感知的 pseudo-label 可靠性建模**
+
+主张：
+
+- 强 fog 下，fusion 结果可能比单模态更不可靠；
+- 因此 TTA 不应无条件依赖 fused pseudo labels；
+- 应引入跨模态一致性 / 冲突强度信号，决定伪标签是否可信、以及可信到什么程度。
+
+#### 小创新 1
+
+**Selective adaptation boundary**
+
+继续保留并系统化当前已验证有效的冻结策略：
+
+- 冻结 `image_backbone + neck`
+- 只让更靠后的融合与检测部分做适配
+
+这一点适合作为 supporting contribution，而不是主 novelty。
+
+#### 小创新 2
+
+**Class-aware depth-aware denoising**
+
+继续保留并整理当前已验证有效的：
+
+- `pedestrian`
+- `traffic_cone`
+
+高噪类深度过滤思路，将其作为类级别的 targeted denoising 支撑模块。
+
+### 15.3 最优先的下一个方法实验
+
+最推荐的下一实验不是直接扩到更多 corruption，而是：
+
+1. 用 `fog s3 full-val` 作为主开发 benchmark；
+2. 以 `F1 + D1.3` 为 base；
+3. 新增一个最小版 **conflict-aware pseudo-label weighting / gating**；
+4. 先比较：
+   - `F1 + D1.3`
+   - `F1 + D1.3 + conflict-aware module`
+5. 若 `s3` 上成立，再在 `s5` 上做确认。
+
+### 15.4 当前不建议优先投入的方向
+
+在下一阶段，不建议优先把精力投入到：
+
+- 继续做 `fog s1` TTA；
+- 再次把 aggregation 拉回论文主线；
+- 大量微调单个伪标签阈值；
+- 过早同时展开 `rain + sunlight + night + KITTI-C`。
+
+更合理的策略是：
+
+- 先用 `fog s3` 建立方法主结论；
+- 再用 `fog s5` 验证强退化；
+- 成立之后再扩展到 `rain / sunlight / night / KITTI-C`。
+
+---
+
+## 16. 当前最推荐的主结论
 
 如果后续实验顺利，论文最终最适合落在下面这类结论：
 
