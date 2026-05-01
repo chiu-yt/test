@@ -1,3 +1,5 @@
+import torch
+
 from .detector3d_template import Detector3DTemplate
 from .. import backbones_image, view_transforms
 from ..backbones_image import img_neck
@@ -57,8 +59,14 @@ class BevFusion(Detector3DTemplate):
         return fuser_module, model_info_dict
 
     def forward(self, batch_dict):
+        export_conflict_analysis = self._forward_only_conflict_analysis_enabled() and not self.training
+        lidar_bev = None
+        image_bev = None
 
         for i,cur_module in enumerate(self.module_list):
+            if export_conflict_analysis and cur_module is self.fuser:
+                lidar_bev = batch_dict['spatial_features']
+                image_bev = batch_dict['spatial_features_img']
             batch_dict = cur_module(batch_dict)
         
         if self.training:
@@ -70,7 +78,53 @@ class BevFusion(Detector3DTemplate):
             return ret_dict, tb_dict, disp_dict
         else:
             pred_dicts, recall_dicts = self.post_processing(batch_dict)
+            if export_conflict_analysis:
+                self._attach_forward_only_conflict_analysis(
+                    batch_dict=batch_dict,
+                    pred_dicts=pred_dicts,
+                    lidar_bev=lidar_bev,
+                    image_bev=image_bev
+                )
             return pred_dicts, recall_dicts
+
+    def _forward_only_conflict_analysis_enabled(self):
+        analysis_cfg = self.model_cfg.get('FORWARD_ONLY_CONFLICT_ANALYSIS', None)
+        return analysis_cfg is not None and analysis_cfg.get('ENABLED', False)
+
+    @staticmethod
+    def _copy_pred_box_dict(box_dict):
+        return {
+            'pred_boxes': box_dict['pred_boxes'],
+            'pred_scores': box_dict['pred_scores'],
+            'pred_labels': box_dict['pred_labels']
+        }
+
+    def _run_branch_post_fusion(self, lidar_bev, image_bev):
+        branch_batch_dict = {
+            'spatial_features': lidar_bev,
+            'spatial_features_img': image_bev
+        }
+        branch_batch_dict = self.fuser(branch_batch_dict)
+        branch_batch_dict = self.backbone_2d(branch_batch_dict)
+        branch_preds = self.dense_head.predict(branch_batch_dict['spatial_features_2d'])
+        return self.dense_head.get_bboxes(branch_preds)
+
+    def _attach_forward_only_conflict_analysis(self, batch_dict, pred_dicts, lidar_bev, image_bev):
+        if lidar_bev is None or image_bev is None:
+            raise ValueError('Forward-only conflict analysis requires both lidar and image BEV features before fusion.')
+
+        branch_pred_dicts = {
+            'B_L': self._run_branch_post_fusion(lidar_bev, torch.zeros_like(image_bev)),
+            'B_C': self._run_branch_post_fusion(torch.zeros_like(lidar_bev), image_bev)
+        }
+
+        for index, pred_dict in enumerate(pred_dicts):
+            pred_dict['B_Fused'] = self._copy_pred_box_dict(pred_dict)
+            pred_dict['B_L'] = self._copy_pred_box_dict(branch_pred_dicts['B_L'][index])
+            pred_dict['B_C'] = self._copy_pred_box_dict(branch_pred_dicts['B_C'][index])
+
+            if 'gt_boxes' in batch_dict:
+                pred_dict['gt_boxes'] = batch_dict['gt_boxes'][index]
 
     def get_training_loss(self,batch_dict):
         disp_dict = {}

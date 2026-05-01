@@ -75,17 +75,23 @@ class DatasetTemplate(torch_data.Dataset):
         """
         
         def get_template_prediction(num_samples):
-            box_dim = 9 if self.dataset_cfg.get('TRAIN_WITH_SPEED', False) else 7
+            train_with_speed = self.dataset_cfg is not None and self.dataset_cfg.get('TRAIN_WITH_SPEED', False)
+            box_dim = 9 if train_with_speed else 7
             ret_dict = {
                 'name': np.zeros(num_samples), 'score': np.zeros(num_samples),
                 'boxes_lidar': np.zeros([num_samples, box_dim]), 'pred_labels': np.zeros(num_samples)
             }
             return ret_dict
 
+        def to_numpy(value):
+            if isinstance(value, torch.Tensor):
+                return value.detach().cpu().numpy()
+            return np.asarray(value)
+
         def generate_single_sample_dict(box_dict):
-            pred_scores = box_dict['pred_scores'].cpu().numpy()
-            pred_boxes = box_dict['pred_boxes'].cpu().numpy()
-            pred_labels = box_dict['pred_labels'].cpu().numpy()
+            pred_scores = to_numpy(box_dict['pred_scores'])
+            pred_boxes = to_numpy(box_dict['pred_boxes'])
+            pred_labels = to_numpy(box_dict['pred_labels'])
             pred_dict = get_template_prediction(pred_scores.shape[0])
             if pred_scores.shape[0] == 0:
                 return pred_dict
@@ -97,12 +103,39 @@ class DatasetTemplate(torch_data.Dataset):
 
             return pred_dict
 
+        def generate_single_sample_gt_dict(gt_boxes):
+            gt_boxes = to_numpy(gt_boxes)
+            if gt_boxes.ndim != 2 or gt_boxes.shape[0] == 0:
+                return np.zeros((0, gt_boxes.shape[-1] if gt_boxes.ndim == 2 else 0), dtype=np.float32)
+
+            valid_mask = np.isfinite(gt_boxes).all(axis=1)
+            if gt_boxes.shape[1] > 0:
+                valid_mask &= gt_boxes[:, -1] > 0
+            return gt_boxes[valid_mask]
+
         annos = []
         for index, box_dict in enumerate(pred_dicts):
             single_pred_dict = generate_single_sample_dict(box_dict)
             single_pred_dict['frame_id'] = batch_dict['frame_id'][index]
             if 'metadata' in batch_dict:
                 single_pred_dict['metadata'] = batch_dict['metadata'][index]
+
+            analysis_dict = {}
+            branch_outputs_present = False
+            for branch_name in ['B_L', 'B_C', 'B_Fused']:
+                if branch_name in box_dict:
+                    branch_outputs_present = True
+                    analysis_dict[branch_name] = generate_single_sample_dict(box_dict[branch_name])
+
+            if branch_outputs_present:
+                if 'gt_boxes' in box_dict:
+                    analysis_dict['gt_boxes'] = generate_single_sample_gt_dict(box_dict['gt_boxes'])
+                elif 'gt_boxes' in batch_dict:
+                    analysis_dict['gt_boxes'] = generate_single_sample_gt_dict(batch_dict['gt_boxes'][index])
+
+            if branch_outputs_present:
+                single_pred_dict['forward_only_conflict_analysis'] = analysis_dict
+
             annos.append(single_pred_dict)
 
         return annos

@@ -128,6 +128,9 @@ MODEL:
         NAME: ConvFuser
         IN_CHANNEL: 336
         OUT_CHANNEL: 256
+
+    FORWARD_ONLY_CONFLICT_ANALYSIS:
+        ENABLED: False
     
     BACKBONE_2D:
         NAME: BaseBEVBackbone

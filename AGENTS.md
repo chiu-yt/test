@@ -22,12 +22,18 @@
 - `docs/` and `docker/`: documentation and container files.
 
 ## Research Context
-- This repo is being used for `BEVFusion` night-domain TTA with MOS-inspired self-training and memory ensemble ideas.
+- This repo is being used for `BEVFusion` multimodal TTA under adverse-condition domain shift; the older night-domain line remains important context but is now a supplementary real-shift case study rather than the main benchmark.
 - Read `Experiment Record.md` before making nontrivial TTA changes.
 - The main bottleneck is noisy pseudo labels, especially `pedestrian` and `traffic_cone`, more than a total detector-backbone failure.
 - The best stable mainline is `F1 + D1.3`: freeze `image_backbone + neck`, and apply depth-aware pseudo-label filtering only to `pedestrian=0.24` and `traffic_cone=0.34`.
+- Keep the current non-finite pseudo-label / loss protections enabled unless a task explicitly re-evaluates them; they stabilized the TTA loop and should be treated as part of the working baseline.
 - Do not directly port `MOS-main` single-LiDAR aggregation or iter-only bank behavior into root `BEVFusion`; that transfer was negative.
 - Treat broad all-class Top-K pseudo-label filtering as a previously negative direction unless a task explicitly revisits it.
+- Current adverse-condition benchmark protocol should use **full nuScenes val**; keep the 602-frame night subset only for supplementary real-scene analysis.
+- Current fog benchmark findings: `fog s1` is too weak for main-method evaluation, `fog s3` is the main development benchmark, and `fog s5` is the strong-corruption confirmation benchmark.
+- Under strong fog, fused dual-modality predictions can underperform single-modality baselines; treat **cross-modal conflict and fused pseudo-label unreliability** as the main working hypothesis for the next method stage.
+- For corruption engineering, prefer `3D_Corruptions_AD` as the online corruption implementation source and use `Robo3D` mainly as a benchmark/layout reference.
+- Do not make checkpoint aggregation the paper center; prioritize **conflict-aware pseudo-label reliability modeling** over additional aggregation complexity or fine-grained threshold retuning.
 - Be careful with pseudo-label tensor semantics, `SELF_TRAIN.TAR.LOSS_WEIGHT`, `loss.mean()`, `update_global_step()`, and side-channel / augmentation synchronization.
 
 ## Auto-Promoted Findings
