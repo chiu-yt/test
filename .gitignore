@@ -41,6 +41,7 @@ wandb/
 tmp/
 temp/
 fog_s3_conflict_probe/
+depth_entropy/
 
 # Checkpoints / pretrained weights
 *.pth

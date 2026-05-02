@@ -566,27 +566,34 @@
 1. 用 `fog s3 full-val` 作为主开发 benchmark；
 2. 以 `F1 + D1.3` 为 base；
 3. 先做 forward-only 伪标签质量验证，而不是直接跑完整 TTA；
-4. 比较四个伪标签可靠性版本：
+4. 先比较 LiDAR 几何物理特征在 TP/FP proxy 上的可分性：
+   - `N_pts`: pseudo box 内点数；
+   - `rho_pts = N_pts / (l * w * h)`: 点密度；
+   - `z_span = z_max - z_min`: 垂直跨度；
+   - `z_var`: 垂直方差；
+5. 再比较伪标签可靠性版本：
    - `F1 + D1.3`
-   - `F1 + D1.3 + depth entropy only`
-   - `F1 + D1.3 + LiDAR point-density only`
-   - `F1 + D1.3 + depth entropy + LiDAR density`
-5. 若伪标签 precision / retained-count / 高噪类误报控制在 `fog s3` 上改善，再跑短 TTA；
-6. 若 `s3` 上成立，再在 `s5` 上做强退化确认。
+   - `F1 + D1.3 + point-density only`
+   - `F1 + D1.3 + geometry verifier`
+   - `F1 + D1.3 + geometry verifier + entropy auxiliary`
+6. 若伪标签 precision / retained-count / 高噪类误报控制在 `fog s3` 上改善，再跑短 TTA；
+7. 若 `s3` 上成立，再在 `s5` 上做强退化确认。
 
-推荐的第一版可靠性形式：
+推荐的第一版可靠性形式从 entropy-first 改为 geometry-first：
 
 ```text
-W_i = Score_i * R_lidar(N_i) * exp(-lambda * H_depth(i))
+W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 ```
 
 其中：
 
-- `R_lidar(N_i)` 来自 pseudo box 内点数，第一版应作为软权重或分段 gate，避免远距离/小目标被硬过滤；
-- `H_depth(i)` 来自现有 LSS depth probability 的归一化熵，优先从 box center 或小窗口取值；
-- `lambda` 第一版固定为 `1` 或少量离散值，不要过度调参以免削弱 parameter-free 叙事。
+- `N_pts` 与 `rho_pts` 用于区分真实目标的稳定点云支撑与大体积稀疏噪声簇；
+- `z_span` / `z_var` 用于验证真实目标 surface reflection 的垂直延展，与 fog volumetric scattering 的悬浮/扁平簇区分；
+- `H_depth(i)` 来自现有 LSS depth probability 的归一化熵，但 object-level probe 已显示 entropy-only 信号弱且方向混合，因此只作为 combined ablation 的辅助项。
 
 文献表述边界：LSS / BEVDepth / BEVFusion 已有离散 depth posterior，单目 3D 检测与 TTA 中也有 uncertainty / entropy weighting 先例；但目前不要声称 BEVFusion 标准做法已经用 depth-bin entropy 过滤 3D pseudo labels。更稳妥的表述是：从已有 depth posterior 中派生一个 zero-cost uncertainty score。
+
+物理叙事边界：surface reflection vs volumetric scattering 是下一步 probe 的科学假设，不应在实验前写成已验证结论。只有当 `N_pts / rho_pts / z_span / z_var` 在 `pedestrian` 与 `traffic_cone` 的 TP/FP proxy 上呈现稳定分离后，才能把 geometry verifier 写成主方法。
 
 ### 15.4 当前不建议优先投入的方向
 
@@ -611,6 +618,6 @@ W_i = Score_i * R_lidar(N_i) * exp(-lambda * H_depth(i))
 如果后续实验顺利，论文最终最适合落在下面这类结论：
 
 > 在多模态 3D 目标检测中，adverse weather / illumination shift 下的 TTA 主要受 noisy pseudo labels 限制；
-> 与继续增强 checkpoint aggregation 相比，面向 LiDAR 几何支持与 LSS 深度不确定性的非对称伪标签可靠性机制更有希望稳定提升性能。
+> 与继续增强 checkpoint aggregation 相比，面向 LiDAR 物理几何验证的非对称伪标签可靠性机制更有希望稳定提升性能；LSS depth entropy 可作为辅助不确定性 cue，但不再是下一步主线。
 
 这个结论比“夜间有效”更通用，比“通用所有 domain”更稳，也更适合快速形成一篇完整论文。

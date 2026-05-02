@@ -54,19 +54,27 @@
 
 因此，下一阶段方法主线修正为：
 
-> **LiDAR-anchored asymmetric pseudo-label reliability modeling**
+> **LiDAR-anchored geometry verification for asymmetric pseudo-label reliability**
 
-推荐落地信号：
+`clean` vs `fog s3` 的 frame-level depth entropy 与 object-level entropy 进一步说明：LSS entropy-only 信号很弱且方向混合，不能作为下一步主线。`traffic_cone` 上 FP entropy 略高于 TP，但相关性接近 0；`pedestrian` 上 TP entropy 反而高于 FP，直接违背“高 entropy = 不可靠”的简单假设。因此，depth entropy 后续只作为辅助 cue / ablation，不作为主可靠性分数。
+
+导师建议后的主叙事应回到 LiDAR 物理几何：真实目标来自 **surface reflection**，点云应具有稳定的物体表面/垂直支撑；雾气误检来自 **volumetric scattering**，点云更可能稀疏、悬浮、体内散布。推荐优先验证的几何信号：
+
+- `N_pts`: pseudo box 内 LiDAR 点数；
+- `rho_pts = N_pts / (l * w * h)`: 点密度，用于约束大体积稀疏噪声簇；
+- `z_span = z_max - z_min` 与 `z_var`: 垂直跨度 / 方差，用于区分真实目标的上下延展与雾气悬浮簇。
+
+新的候选可靠性形式：
 
 ```text
-W_i = Score_i * R_lidar(N_i) * exp(-lambda * H_depth(i))
+W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var) * exp(-lambda * H_depth(i))
 ```
 
-其中 `R_lidar(N_i)` 来自 pseudo box 内点云密度，`H_depth(i)` 来自 BEVFusion LSS depth probability 的归一化熵。`GaussianLSS`、EDL head、Dual-Expert/PanDA 归为 future work 或 related work，不进入当前 source-free/off-the-shelf BEVFusion TTA 主线。
+其中 `G_lidar` 是下一步待验证的几何真伪分数，`H_depth(i)` 只保留为弱辅助项。`GaussianLSS`、EDL head、Dual-Expert/PanDA 归为 future work 或 related work，不进入当前 source-free/off-the-shelf BEVFusion TTA 主线。
 
 文献检索补充：depth posterior 与 uncertainty/entropy weighting 有相关先例，但未发现直接把 BEVFusion depth-bin entropy 用于 3D pseudo-label filtering 的标准做法。因此后续写作应强调“从已有 LSS depth posterior 中派生 zero-cost uncertainty”，而不是宣称该用法已是 BEVFusion 常规实践。
 
-近期实验顺序：先验证 clean vs `fog s3` depth entropy，再做 entropy-only / point-density-only / combined 的 pseudo-label quality ablation，最后再跑 `fog s3` TTA 与 `fog s5` 确认。
+近期实验顺序：先在 `fog s3 full-val` 上用 `pcdet.ops.roiaware_pool3d` 提取 fused pseudo boxes 内点云，做 `N_pts / rho_pts / z_span / z_var` 的 TP/FP proxy 分布验证；若 `pedestrian` / `traffic_cone` 的 precision、retained-count 或误报控制改善，再做 point-density-only / geometry-only 伪标签质量 ablation；combined geometry+entropy 只作为后续辅助对照；最后才跑短 `fog s3` TTA 与 `fog s5` 确认。
 
 ## 1. 研究背景与问题定义
 
