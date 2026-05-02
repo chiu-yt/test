@@ -98,6 +98,9 @@ class BevFusion(Detector3DTemplate):
         analysis_cfg = self.model_cfg.get('DEPTH_ENTROPY_ANALYSIS', None)
         return analysis_cfg is not None and analysis_cfg.get('ENABLED', False)
 
+    def _depth_entropy_analysis_cfg(self):
+        return self.model_cfg.get('DEPTH_ENTROPY_ANALYSIS', {})
+
     @staticmethod
     def _summarize_depth_entropy(depth_entropy):
         depth_entropy = depth_entropy.float()
@@ -139,6 +142,104 @@ class BevFusion(Detector3DTemplate):
 
         for index, pred_dict in enumerate(pred_dicts):
             pred_dict['depth_entropy_analysis'] = self._summarize_depth_entropy(depth_entropy_map[index])
+            pred_dict['depth_entropy_object_analysis'] = self._build_depth_entropy_object_analysis(
+                batch_dict=batch_dict,
+                pred_dict=pred_dict,
+                batch_index=index
+            )
+
+    def _build_depth_entropy_object_analysis(self, batch_dict, pred_dict, batch_index):
+        pred_boxes = pred_dict.get('pred_boxes', None)
+        if pred_boxes is None or pred_boxes.shape[0] == 0:
+            return {
+                'depth_entropy': [],
+                'num_visible_cams': [],
+                'visible_cam_ids': []
+            }
+
+        depth_entropy_map = batch_dict.get('depth_entropy_map', None)
+        lidar2image = batch_dict.get('lidar2image', None)
+        img_aug_matrix = batch_dict.get('img_aug_matrix', None)
+        lidar_aug_matrix = batch_dict.get('lidar_aug_matrix', None)
+        if depth_entropy_map is None or lidar2image is None or img_aug_matrix is None or lidar_aug_matrix is None:
+            return {
+                'depth_entropy': [None for _ in range(pred_boxes.shape[0])],
+                'num_visible_cams': [0 for _ in range(pred_boxes.shape[0])],
+                'visible_cam_ids': [[] for _ in range(pred_boxes.shape[0])]
+            }
+
+        analysis_cfg = self._depth_entropy_analysis_cfg()
+        multi_cam_reduce = str(analysis_cfg.get('OBJECT_MULTI_CAM_REDUCE', 'min')).lower()
+        if multi_cam_reduce not in ['min', 'mean', 'max']:
+            raise ValueError('Unsupported OBJECT_MULTI_CAM_REDUCE: %s' % multi_cam_reduce)
+
+        centers = pred_boxes[:, :3].to(depth_entropy_map.device).float()
+        cur_depth_entropy = depth_entropy_map[batch_index]
+        cur_lidar2image = lidar2image[batch_index].to(torch.float32)
+        cur_img_aug_matrix = img_aug_matrix[batch_index].to(torch.float32)
+        cur_lidar_aug_matrix = lidar_aug_matrix[batch_index].to(torch.float32)
+
+        coords = centers.clone()
+        coords -= cur_lidar_aug_matrix[:3, 3]
+        coords = torch.inverse(cur_lidar_aug_matrix[:3, :3]).matmul(coords.transpose(1, 0))
+        coords = cur_lidar2image[:, :3, :3].matmul(coords)
+        coords += cur_lidar2image[:, :3, 3].reshape(-1, 3, 1)
+
+        raw_depth = coords[:, 2, :].clone()
+        coords[:, 2, :] = torch.clamp(coords[:, 2, :], 1e-5, 1e5)
+        coords[:, :2, :] /= coords[:, 2:3, :]
+
+        coords = cur_img_aug_matrix[:, :3, :3].matmul(coords)
+        coords += cur_img_aug_matrix[:, :3, 3].reshape(-1, 3, 1)
+        coords = coords[:, :2, :].transpose(1, 2)
+        coords = coords[..., [1, 0]]
+
+        if 'camera_imgs' in batch_dict:
+            img_h, img_w = batch_dict['camera_imgs'].shape[-2:]
+        else:
+            img_h, img_w = self.model_cfg.VTRANSFORM.IMAGE_SIZE
+        feat_h, feat_w = cur_depth_entropy.shape[-2:]
+
+        on_img = (
+            (raw_depth > 1e-5)
+            & (coords[..., 0] >= 0) & (coords[..., 0] < img_h)
+            & (coords[..., 1] >= 0) & (coords[..., 1] < img_w)
+        )
+
+        feat_y = torch.clamp((coords[..., 0] / max(float(img_h), 1.0) * feat_h).long(), min=0, max=feat_h - 1)
+        feat_x = torch.clamp((coords[..., 1] / max(float(img_w), 1.0) * feat_w).long(), min=0, max=feat_w - 1)
+
+        object_entropy = []
+        num_visible_cams = []
+        visible_cam_ids = []
+        for box_idx in range(pred_boxes.shape[0]):
+            cam_mask = on_img[:, box_idx]
+            cam_ids = torch.where(cam_mask)[0]
+            visible_cam_ids.append([int(cam_idx.item()) for cam_idx in cam_ids])
+            num_visible_cams.append(int(cam_ids.numel()))
+            if cam_ids.numel() == 0:
+                object_entropy.append(None)
+                continue
+
+            cam_entropy = cur_depth_entropy[cam_mask, feat_y[cam_mask, box_idx], feat_x[cam_mask, box_idx]]
+            cam_entropy = cam_entropy[torch.isfinite(cam_entropy)]
+            if cam_entropy.numel() == 0:
+                object_entropy.append(None)
+                continue
+
+            if multi_cam_reduce == 'mean':
+                reduced_entropy = cam_entropy.mean()
+            elif multi_cam_reduce == 'max':
+                reduced_entropy = cam_entropy.max()
+            else:
+                reduced_entropy = cam_entropy.min()
+            object_entropy.append(float(reduced_entropy.item()))
+
+        return {
+            'depth_entropy': object_entropy,
+            'num_visible_cams': num_visible_cams,
+            'visible_cam_ids': visible_cam_ids
+        }
 
     @staticmethod
     def _copy_pred_box_dict(box_dict):

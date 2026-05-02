@@ -139,6 +139,14 @@ class DatasetTemplate(torch_data.Dataset):
             if 'depth_entropy_analysis' in box_dict:
                 single_pred_dict['depth_entropy_analysis'] = box_dict['depth_entropy_analysis']
 
+            if 'depth_entropy_object_analysis' in box_dict:
+                object_analysis = dict(box_dict['depth_entropy_object_analysis'])
+                if 'gt_boxes' in box_dict:
+                    object_analysis['gt_boxes'] = generate_single_sample_gt_dict(box_dict['gt_boxes'])
+                elif 'gt_boxes' in batch_dict:
+                    object_analysis['gt_boxes'] = generate_single_sample_gt_dict(batch_dict['gt_boxes'][index])
+                single_pred_dict['depth_entropy_object_analysis'] = object_analysis
+
             annos.append(single_pred_dict)
 
         return annos
