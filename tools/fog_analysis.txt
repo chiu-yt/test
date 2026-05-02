@@ -1,0 +1,41 @@
+Saved summary to ../output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_depth_entropy/depth_entropy_summary.json
+{
+  "num_samples": 6019,
+  "num_samples_with_depth_entropy": 6019,
+  "num_samples_missing_depth_entropy": 0,
+  "sample_mean_entropy": {
+    "count": 6019,
+    "mean": 0.6625250449983122,
+    "p50": 0.6626957654953003,
+    "p75": 0.6698769330978394,
+    "p90": 0.6753102540969849
+  },
+  "sample_p50_entropy": {
+    "count": 6019,
+    "mean": 0.6568297214000244,
+    "p50": 0.6573562622070312,
+    "p75": 0.6660018563270569,
+    "p90": 0.6719059705734254
+  },
+  "sample_p75_entropy": {
+    "count": 6019,
+    "mean": 0.7364087452086763,
+    "p50": 0.7373631000518799,
+    "p75": 0.745852530002594,
+    "p90": 0.7522486567497253
+  },
+  "sample_p90_entropy": {
+    "count": 6019,
+    "mean": 0.8141048190046691,
+    "p50": 0.8165872097015381,
+    "p75": 0.8280784487724304,
+    "p90": 0.8361804842948914
+  },
+  "camera_mean_entropy": {
+    "count": 36114,
+    "mean": 0.662525046067809,
+    "p50": 0.6631289422512054,
+    "p75": 0.6744414120912552,
+    "p90": 0.6854014873504639
+  }
+}

@@ -1,5 +1,51 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_depth_entropy||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-05-02T20:05:45",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/default",
+    "extra_tag": "default",
+    "eval_tag": "fog_s3_depth_entropy",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_depth_entropy",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.6557481427435552,
+      "mAP": 0.6131158865301958
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_depth_entropy/final_result/data/metrics_summary.json"
+  },
+  {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_depth_entropy||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-05-02T19:39:12",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/default",
+    "extra_tag": "default",
+    "eval_tag": "clean_depth_entropy",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_depth_entropy",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.6734556048223782,
+      "mAP": 0.6417603153294327
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_depth_entropy/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_conflict_probe||checkpoint_epoch_10.pth||single_eval",
     "updated_at": "2026-05-01T23:47:08",
     "source": "tools/test.py",
