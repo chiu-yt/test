@@ -482,16 +482,17 @@
    - 在 `s5` 下，性能退化明显；
    - 更适合作为方法泛化与强鲁棒性验证，而不是第一开发集。
 
-4. **强 fog 下，多模态融合会比单模态更脆弱**
+4. **强 fog 下，多模态融合会比单模态更脆弱，但问题更接近非对称退化而非对称冲突**
    - `s3` 下 dual 明显差于 lidar-only 与 image-only；
    - `s5` 下 dual 的退化最严重；
-   - 这说明 adverse condition 下的主问题不是“输入坏了”这么简单，而是**跨模态冲突导致 fused pseudo labels 不可靠**。
+   - 后续 `fog_s3_conflict_probe` 显示，`B_L` 与 `B_C` 的中心距离和 fused GT center error 几乎无正相关；
+   - 更合理的解释是：强 fog 下 Camera-only proposal 支持稀疏，高置信 fused pseudo labels 主要由 LiDAR 几何支撑，Camera 分支更多体现为深度/语义不确定性。
 
 ### 14.3 这组 benchmark 的真正意义
 
 这一步最重要的贡献，不是单纯补齐了 benchmark，而是帮助当前项目确认了：
 
-> **后续论文与方法创新，应该聚焦“跨模态冲突感知的伪标签可靠性建模”，而不是继续做更细的阈值调参与 aggregation 微调。**
+> **后续论文与方法创新，应该聚焦“LiDAR 锚定的非对称伪标签可靠性建模”，而不是继续做更细的阈值调参与 aggregation 微调。**
 
 也就是说，这些 fog benchmark 已经把主问题从“是否存在 adverse shift”推进到了：
 
@@ -501,7 +502,7 @@
 
 ---
 
-## 15. 下一阶段方法主线（基于已有 benchmark 结果）
+## 15. 下一阶段方法主线（基于 forward-only probe 后的修正）
 
 ### 15.1 当前最值得做的大方向
 
@@ -511,27 +512,30 @@
 - 更复杂的 aggregation 细节；
 - 把 `s1` 再扩展成更多弱 corruption 对照。
 
-当前最值得做的方法主线应为：
+当前最值得做的方法主线应修正为：
 
-> **Cross-modal conflict-aware pseudo-label reliability modeling for multimodal 3D TTA**
+> **LiDAR-anchored asymmetric pseudo-label reliability modeling for multimodal 3D TTA**
 
 也就是：
 
 - 不默认信任 fused pseudo labels；
-- 在 adverse condition 下显式判断 image 与 lidar 证据是否冲突；
-- 当冲突强时，对伪标签做降权、筛除或可靠性重分配。
+- 不再把 `B_L` 与 `B_C` 的几何距离作为核心可靠性信号；
+- 将 LiDAR 点云支持度作为几何锚点；
+- 将 LSS 深度分布熵作为 Camera / depth 不确定性惩罚；
+- 在不改预训练 BEVFusion 架构的前提下，对伪标签做过滤、降权或可靠性重分配。
 
 ### 15.2 一大创新 + 两个小创新的建议结构
 
 #### 大创新
 
-**跨模态冲突感知的 pseudo-label 可靠性建模**
+**LiDAR 锚定的非对称 pseudo-label 可靠性建模**
 
 主张：
 
 - 强 fog 下，fusion 结果可能比单模态更不可靠；
-- 因此 TTA 不应无条件依赖 fused pseudo labels；
-- 应引入跨模态一致性 / 冲突强度信号，决定伪标签是否可信、以及可信到什么程度。
+- 但当前 probe 不支持“LiDAR/Camera 对称几何冲突距离”作为主信号；
+- 因此 TTA 不应无条件依赖 fused pseudo labels，而应使用 LiDAR 点云密度与 LSS depth entropy 估计其可靠性；
+- 该方向保持 source-free / off-the-shelf BEVFusion 约束，不需要 GaussianLSS、EDL head 或 dual-expert 预训练。
 
 #### 小创新 1
 
@@ -561,11 +565,28 @@
 
 1. 用 `fog s3 full-val` 作为主开发 benchmark；
 2. 以 `F1 + D1.3` 为 base；
-3. 新增一个最小版 **conflict-aware pseudo-label weighting / gating**；
-4. 先比较：
+3. 先做 forward-only 伪标签质量验证，而不是直接跑完整 TTA；
+4. 比较四个伪标签可靠性版本：
    - `F1 + D1.3`
-   - `F1 + D1.3 + conflict-aware module`
-5. 若 `s3` 上成立，再在 `s5` 上做确认。
+   - `F1 + D1.3 + depth entropy only`
+   - `F1 + D1.3 + LiDAR point-density only`
+   - `F1 + D1.3 + depth entropy + LiDAR density`
+5. 若伪标签 precision / retained-count / 高噪类误报控制在 `fog s3` 上改善，再跑短 TTA；
+6. 若 `s3` 上成立，再在 `s5` 上做强退化确认。
+
+推荐的第一版可靠性形式：
+
+```text
+W_i = Score_i * R_lidar(N_i) * exp(-lambda * H_depth(i))
+```
+
+其中：
+
+- `R_lidar(N_i)` 来自 pseudo box 内点数，第一版应作为软权重或分段 gate，避免远距离/小目标被硬过滤；
+- `H_depth(i)` 来自现有 LSS depth probability 的归一化熵，优先从 box center 或小窗口取值；
+- `lambda` 第一版固定为 `1` 或少量离散值，不要过度调参以免削弱 parameter-free 叙事。
+
+文献表述边界：LSS / BEVDepth / BEVFusion 已有离散 depth posterior，单目 3D 检测与 TTA 中也有 uncertainty / entropy weighting 先例；但目前不要声称 BEVFusion 标准做法已经用 depth-bin entropy 过滤 3D pseudo labels。更稳妥的表述是：从已有 depth posterior 中派生一个 zero-cost uncertainty score。
 
 ### 15.4 当前不建议优先投入的方向
 
@@ -574,6 +595,7 @@
 - 继续做 `fog s1` TTA；
 - 再次把 aggregation 拉回论文主线；
 - 大量微调单个伪标签阈值；
+- 把 `GaussianLSS`、EDL 或 dual-expert/PanDA 作为当前主方法；
 - 过早同时展开 `rain + sunlight + night + KITTI-C`。
 
 更合理的策略是：
@@ -589,6 +611,6 @@
 如果后续实验顺利，论文最终最适合落在下面这类结论：
 
 > 在多模态 3D 目标检测中，adverse weather / illumination shift 下的 TTA 主要受 noisy pseudo labels 限制；
-> 与继续增强 checkpoint aggregation 相比，面向模态冲突与伪标签可靠性的适应机制更能稳定提升性能。
+> 与继续增强 checkpoint aggregation 相比，面向 LiDAR 几何支持与 LSS 深度不确定性的非对称伪标签可靠性机制更有希望稳定提升性能。
 
 这个结论比“夜间有效”更通用，比“通用所有 domain”更稳，也更适合快速形成一篇完整论文。

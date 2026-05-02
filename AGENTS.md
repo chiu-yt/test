@@ -31,9 +31,11 @@
 - Treat broad all-class Top-K pseudo-label filtering as a previously negative direction unless a task explicitly revisits it.
 - Current adverse-condition benchmark protocol should use **full nuScenes val**; keep the 602-frame night subset only for supplementary real-scene analysis.
 - Current fog benchmark findings: `fog s1` is too weak for main-method evaluation, `fog s3` is the main development benchmark, and `fog s5` is the strong-corruption confirmation benchmark.
-- Under strong fog, fused dual-modality predictions can underperform single-modality baselines; treat **cross-modal conflict and fused pseudo-label unreliability** as the main working hypothesis for the next method stage.
+- Under strong fog, fused dual-modality predictions can underperform single-modality baselines, but the `fog_s3_conflict_probe` showed that symmetric `B_L`/`B_C` center-distance conflict is not a useful reliability signal (`overall=-0.034`, `pedestrian=-0.014`, `traffic_cone=-0.010`). Treat the main hypothesis as **asymmetric reliability collapse**: high-confidence fused pseudo labels are mostly LiDAR-supported while camera-only support is sparse.
 - For corruption engineering, prefer `3D_Corruptions_AD` as the online corruption implementation source and use `Robo3D` mainly as a benchmark/layout reference.
-- Do not make checkpoint aggregation the paper center; prioritize **conflict-aware pseudo-label reliability modeling** over additional aggregation complexity or fine-grained threshold retuning.
+- Do not make checkpoint aggregation the paper center; prioritize **LiDAR-anchored, parameter-free pseudo-label reliability modeling** using existing LSS depth uncertainty and LiDAR point-density support over additional aggregation complexity or fine-grained threshold retuning.
+- Keep `GaussianLSS`, evidential learning heads, and dual-expert/PanDA-style refinements out of the current mainline unless the task explicitly becomes source pretraining / architecture redesign; they are future-work or related-work ideas, not source-free off-the-shelf BEVFusion TTA changes.
+- Next method landing should be staged: first validate clean-vs-`fog s3` LSS depth entropy, then test pseudo-label quality for entropy-only, point-density-only, and combined reliability, then run TTA on `fog s3` and confirm on `fog s5` only if pseudo-label quality improves.
 - Be careful with pseudo-label tensor semantics, `SELF_TRAIN.TAR.LOSS_WEIGHT`, `loss.mean()`, `update_global_step()`, and side-channel / augmentation synchronization.
 
 ## Auto-Promoted Findings
