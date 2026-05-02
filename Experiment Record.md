@@ -3,6 +3,9 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
+- `2026-05-01 23:47:08` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6561 mAP=0.6142 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_conflict_probe`
 - `2026-04-19 21:26:56` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_lidar_s5_fullval` `best_epoch=10` `NDS=0.6017 mAP=0.5213 promoted=no`
   - exp: `bevfusion_mos/fog_image_lidar_s5_fullval`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s5_fullval/eval/epoch_10/val/fog_image_lidar_s5_fullval`
@@ -36,9 +39,6 @@
 - `2026-04-18 12:59:00` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_lidar_s1` `best_epoch=10` `NDS=0.4086 mAP=0.3572 promoted=no`
   - exp: `bevfusion_mos/fog_image_lidar_s1`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s1/eval/epoch_10/val/fog_image_lidar_s1`
-- `2026-04-18 12:51:10` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_s1` `best_epoch=10` `NDS=0.4086 mAP=0.3593 promoted=no`
-  - exp: `bevfusion_mos/fog_image_s1`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s1/eval/epoch_10/val/fog_image_s1`
 <!-- AUTO-EXPERIMENT-LOG:END -->
 
 ## 1. 研究背景与问题定义
