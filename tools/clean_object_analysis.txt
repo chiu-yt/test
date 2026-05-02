@@ -1,0 +1,43 @@
+Saved summary to ../output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_object_depth_entropy/depth_entropy_summary.json
+{
+  "num_samples": 6019,
+  "num_samples_with_depth_entropy": 6019,
+  "num_samples_missing_depth_entropy": 0,
+  "sample_mean_entropy": {
+    "count": 6019,
+    "mean": 0.6638146000440027,
+    "p50": 0.6643937826156616,
+    "p75": 0.6712846159934998,
+    "p90": 0.6772745728492736
+  },
+  "sample_p50_entropy": {
+    "count": 6019,
+    "mean": 0.6598130717172954,
+    "p50": 0.6600959897041321,
+    "p75": 0.6676103472709656,
+    "p90": 0.6756972908973693
+  },
+  "sample_p75_entropy": {
+    "count": 6019,
+    "mean": 0.7376102001529573,
+    "p50": 0.7387036681175232,
+    "p75": 0.7470840215682983,
+    "p90": 0.7549567580223084
+  },
+  "sample_p90_entropy": {
+    "count": 6019,
+    "mean": 0.8134012345084124,
+    "p50": 0.8154288530349731,
+    "p75": 0.8272956609725952,
+    "p90": 0.8350279808044434
+  },
+  "camera_mean_entropy": {
+    "count": 36114,
+    "mean": 0.6638146008164171,
+    "p50": 0.6648722290992737,
+    "p75": 0.6767944842576981,
+    "p90": 0.68726646900177
+  }
+}
+Saved object summary to ../output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_object_depth_entropy/depth_entropy_object_summary.json
+Saved object rows to ../output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_object_depth_entropy/depth_entropy_object_per_prediction.csv

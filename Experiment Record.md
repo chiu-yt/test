@@ -3,6 +3,12 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
+- `2026-05-02 21:44:58` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6561 mAP=0.6136 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_object_depth_entropy`
+- `2026-05-02 21:13:22` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6736 mAP=0.6420 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_object_depth_entropy`
 - `2026-05-02 20:05:45` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6557 mAP=0.6131 promoted=no`
   - exp: `bevfusion_mos/default`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_depth_entropy`
@@ -33,12 +39,6 @@
 - `2026-04-18 22:44:52` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_lidar_s1_fullval` `best_epoch=10` `NDS=0.6705 mAP=0.6381 promoted=no`
   - exp: `bevfusion_mos/fog_image_lidar_s1_fullval`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s1_fullval/eval/epoch_10/val/fog_image_lidar_s1_fullval`
-- `2026-04-18 21:56:04` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_s1_fullval` `best_epoch=10` `NDS=0.6715 mAP=0.6393 promoted=no`
-  - exp: `bevfusion_mos/fog_image_s1_fullval`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s1_fullval/eval/epoch_10/val/fog_image_s1_fullval`
-- `2026-04-18 20:27:17` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_lidar_s1_fullval` `best_epoch=10` `NDS=0.6728 mAP=0.6409 promoted=no`
-  - exp: `bevfusion_mos/fog_lidar_s1_fullval`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_lidar_s1_fullval/eval/epoch_10/val/fog_lidar_s1_fullval`
 <!-- AUTO-EXPERIMENT-LOG:END -->
 
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
