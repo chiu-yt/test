@@ -61,6 +61,7 @@ class BevFusion(Detector3DTemplate):
     def forward(self, batch_dict):
         export_conflict_analysis = self._forward_only_conflict_analysis_enabled() and not self.training
         export_depth_entropy_analysis = self._depth_entropy_analysis_enabled() and not self.training
+        export_geometry_analysis = self._forward_only_geometry_analysis_enabled() and not self.training
         lidar_bev = None
         image_bev = None
 
@@ -79,6 +80,8 @@ class BevFusion(Detector3DTemplate):
             return ret_dict, tb_dict, disp_dict
         else:
             pred_dicts, recall_dicts = self.post_processing(batch_dict)
+            if export_geometry_analysis:
+                self._attach_forward_only_geometry_analysis(batch_dict=batch_dict, pred_dicts=pred_dicts)
             if export_depth_entropy_analysis:
                 self._attach_depth_entropy_analysis(batch_dict=batch_dict, pred_dicts=pred_dicts)
             if export_conflict_analysis:
@@ -98,8 +101,109 @@ class BevFusion(Detector3DTemplate):
         analysis_cfg = self.model_cfg.get('DEPTH_ENTROPY_ANALYSIS', None)
         return analysis_cfg is not None and analysis_cfg.get('ENABLED', False)
 
+    def _forward_only_geometry_analysis_enabled(self):
+        analysis_cfg = self.model_cfg.get('FORWARD_ONLY_GEOMETRY_ANALYSIS', None)
+        return analysis_cfg is not None and analysis_cfg.get('ENABLED', False)
+
     def _depth_entropy_analysis_cfg(self):
         return self.model_cfg.get('DEPTH_ENTROPY_ANALYSIS', {})
+
+    @staticmethod
+    def _empty_geometry_object_analysis(num_boxes):
+        return {
+            'point_count': [0 for _ in range(num_boxes)],
+            'point_density': [None for _ in range(num_boxes)],
+            'z_span': [None for _ in range(num_boxes)],
+            'z_var': [None for _ in range(num_boxes)],
+            'valid_geometry': [False for _ in range(num_boxes)]
+        }
+
+    def _attach_forward_only_geometry_analysis(self, batch_dict, pred_dicts):
+        for index, pred_dict in enumerate(pred_dicts):
+            pred_dict['geometry_object_analysis'] = self._build_geometry_object_analysis(
+                batch_dict=batch_dict,
+                pred_dict=pred_dict,
+                batch_index=index
+            )
+            if 'gt_boxes' in batch_dict:
+                pred_dict['gt_boxes'] = batch_dict['gt_boxes'][index]
+
+    def _build_geometry_object_analysis(self, batch_dict, pred_dict, batch_index):
+        pred_boxes = pred_dict.get('pred_boxes', None)
+        if pred_boxes is None or pred_boxes.shape[0] == 0:
+            return self._empty_geometry_object_analysis(0)
+
+        num_boxes = pred_boxes.shape[0]
+        points = batch_dict.get('points', None)
+        if points is None or points.shape[0] == 0:
+            return self._empty_geometry_object_analysis(num_boxes)
+
+        valid_box_mask = (
+            torch.isfinite(pred_boxes[:, :7]).all(dim=1)
+            & (pred_boxes[:, 3:6] > 0).all(dim=1)
+        )
+        if valid_box_mask.sum().item() == 0:
+            return self._empty_geometry_object_analysis(num_boxes)
+
+        batch_mask = points[:, 0].long() == batch_index
+        cur_points = points[batch_mask, 1:4]
+        if cur_points.shape[0] == 0:
+            return self._empty_geometry_object_analysis(num_boxes)
+
+        from pcdet.ops.roiaware_pool3d import roiaware_pool3d_utils
+
+        valid_boxes = pred_boxes[valid_box_mask, :7]
+        point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
+            cur_points.detach().cpu(), valid_boxes.detach().cpu()
+        )
+        if not isinstance(point_indices, torch.Tensor):
+            point_indices = torch.from_numpy(point_indices)
+
+        valid_box_indices = torch.where(valid_box_mask)[0]
+        valid_box_lookup = {
+            int(box_idx.item()): valid_idx for valid_idx, box_idx in enumerate(valid_box_indices)
+        }
+        cur_points_cpu = cur_points.detach().cpu()
+
+        point_count = []
+        point_density = []
+        z_span = []
+        z_var = []
+        valid_geometry = []
+
+        for box_idx in range(num_boxes):
+            valid_idx = valid_box_lookup.get(box_idx, None)
+            if valid_idx is None:
+                point_count.append(0)
+                point_density.append(None)
+                z_span.append(None)
+                z_var.append(None)
+                valid_geometry.append(False)
+                continue
+
+            inside_mask = point_indices[valid_idx] > 0
+            count = int(inside_mask.sum().item())
+            volume = float(pred_boxes[box_idx, 3:6].prod().item())
+
+            point_count.append(count)
+            point_density.append(float(count / max(volume, 1e-6)))
+            valid_geometry.append(True)
+            if count == 0:
+                z_span.append(None)
+                z_var.append(None)
+                continue
+
+            inside_z = cur_points_cpu[inside_mask, 2].float()
+            z_span.append(float((inside_z.max() - inside_z.min()).item()))
+            z_var.append(float(inside_z.var(unbiased=False).item()))
+
+        return {
+            'point_count': point_count,
+            'point_density': point_density,
+            'z_span': z_span,
+            'z_var': z_var,
+            'valid_geometry': valid_geometry
+        }
 
     @staticmethod
     def _summarize_depth_entropy(depth_entropy):
