@@ -60,6 +60,7 @@ class BevFusion(Detector3DTemplate):
 
     def forward(self, batch_dict):
         export_conflict_analysis = self._forward_only_conflict_analysis_enabled() and not self.training
+        export_depth_entropy_analysis = self._depth_entropy_analysis_enabled() and not self.training
         lidar_bev = None
         image_bev = None
 
@@ -78,6 +79,8 @@ class BevFusion(Detector3DTemplate):
             return ret_dict, tb_dict, disp_dict
         else:
             pred_dicts, recall_dicts = self.post_processing(batch_dict)
+            if export_depth_entropy_analysis:
+                self._attach_depth_entropy_analysis(batch_dict=batch_dict, pred_dicts=pred_dicts)
             if export_conflict_analysis:
                 self._attach_forward_only_conflict_analysis(
                     batch_dict=batch_dict,
@@ -90,6 +93,52 @@ class BevFusion(Detector3DTemplate):
     def _forward_only_conflict_analysis_enabled(self):
         analysis_cfg = self.model_cfg.get('FORWARD_ONLY_CONFLICT_ANALYSIS', None)
         return analysis_cfg is not None and analysis_cfg.get('ENABLED', False)
+
+    def _depth_entropy_analysis_enabled(self):
+        analysis_cfg = self.model_cfg.get('DEPTH_ENTROPY_ANALYSIS', None)
+        return analysis_cfg is not None and analysis_cfg.get('ENABLED', False)
+
+    @staticmethod
+    def _summarize_depth_entropy(depth_entropy):
+        depth_entropy = depth_entropy.float()
+        finite_mask = torch.isfinite(depth_entropy)
+        if finite_mask.sum().item() == 0:
+            return {
+                'valid_pixels': 0,
+                'mean': None,
+                'p50': None,
+                'p75': None,
+                'p90': None,
+                'per_camera_mean': []
+            }
+
+        valid_entropy = depth_entropy[finite_mask]
+        quantiles = torch.quantile(valid_entropy, valid_entropy.new_tensor([0.5, 0.75, 0.9]))
+        per_camera_mean = []
+        for cam_idx in range(depth_entropy.shape[0]):
+            cam_entropy = depth_entropy[cam_idx]
+            cam_mask = torch.isfinite(cam_entropy)
+            if cam_mask.sum().item() == 0:
+                per_camera_mean.append(None)
+            else:
+                per_camera_mean.append(float(cam_entropy[cam_mask].mean().item()))
+
+        return {
+            'valid_pixels': int(finite_mask.sum().item()),
+            'mean': float(valid_entropy.mean().item()),
+            'p50': float(quantiles[0].item()),
+            'p75': float(quantiles[1].item()),
+            'p90': float(quantiles[2].item()),
+            'per_camera_mean': per_camera_mean
+        }
+
+    def _attach_depth_entropy_analysis(self, batch_dict, pred_dicts):
+        depth_entropy_map = batch_dict.get('depth_entropy_map', None)
+        if depth_entropy_map is None:
+            return
+
+        for index, pred_dict in enumerate(pred_dicts):
+            pred_dict['depth_entropy_analysis'] = self._summarize_depth_entropy(depth_entropy_map[index])
 
     @staticmethod
     def _copy_pred_box_dict(box_dict):

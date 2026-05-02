@@ -136,6 +136,9 @@ class DatasetTemplate(torch_data.Dataset):
             if branch_outputs_present:
                 single_pred_dict['forward_only_conflict_analysis'] = analysis_dict
 
+            if 'depth_entropy_analysis' in box_dict:
+                single_pred_dict['depth_entropy_analysis'] = box_dict['depth_entropy_analysis']
+
             annos.append(single_pred_dict)
 
         return annos

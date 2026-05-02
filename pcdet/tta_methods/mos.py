@@ -794,6 +794,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
         fid = raw_fid.item() if hasattr(raw_fid, 'item') else raw_fid
         if fid in NEW_PSEUDO_LABELS:
             NEW_PSEUDO_LABELS[fid] = _apply_depth_uncertainty_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
+            NEW_PSEUDO_LABELS[fid] = _apply_depth_entropy_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
             NEW_PSEUDO_LABELS[fid] = _apply_multimodal_conflict_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
 
     # A11: 前置质量过滤（按类别 Top-K 限流，重点约束长尾高噪类）
@@ -989,6 +990,115 @@ def _apply_depth_uncertainty_filter(gt_infos, batch_dict, batch_index):
             depth_conf = cam_conf.mean()
 
         if float(depth_conf.item()) < cur_conf_thresh:
+            keep_mask[global_idx] = False
+
+    if keep_mask.all():
+        return gt_infos
+
+    filtered_infos = {
+        'gt_boxes': gt_boxes[keep_mask],
+        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
+        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
+        'memory_counter': gt_infos['memory_counter'][keep_mask]
+    }
+    return filtered_infos
+
+
+def _apply_depth_entropy_filter(gt_infos, batch_dict, batch_index):
+    """
+    从现有 LSS depth posterior 派生的 zero-cost entropy 过滤。
+    默认关闭；开启后仅对高噪类别按 box center 的归一化 depth entropy 做过滤。
+    """
+    entropy_filter_cfg = cfg.SELF_TRAIN.get('DEPTH_ENTROPY_FILTER', None)
+    if entropy_filter_cfg is None or not entropy_filter_cfg.get('ENABLED', False):
+        return gt_infos
+
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    if gt_boxes is None or len(gt_boxes) == 0:
+        return gt_infos
+
+    depth_entropy_map = batch_dict.get('depth_entropy_map', None)
+    lidar2image = batch_dict.get('lidar2image', None)
+    img_aug_matrix = batch_dict.get('img_aug_matrix', None)
+    lidar_aug_matrix = batch_dict.get('lidar_aug_matrix', None)
+    if depth_entropy_map is None or lidar2image is None or img_aug_matrix is None or lidar_aug_matrix is None:
+        return gt_infos
+
+    target_names = set(entropy_filter_cfg.get('TARGET_CLASSES', ['pedestrian', 'traffic_cone']))
+    target_ids = [i + 1 for i, name in enumerate(cfg.CLASS_NAMES) if name in target_names]
+    if len(target_ids) == 0:
+        return gt_infos
+
+    entropy_thresh = float(entropy_filter_cfg.get('ENTROPY_THRESH', 0.65))
+    class_entropy_thresh_cfg = entropy_filter_cfg.get('CLASS_ENTROPY_THRESH', {})
+    multi_cam_reduce = entropy_filter_cfg.get('MULTI_CAM_REDUCE', 'min')
+
+    labels = np.abs(gt_boxes[:, 7]).astype(np.int64)
+    candidate_inds = np.where(np.isin(labels, np.array(target_ids, dtype=np.int64)))[0]
+    if candidate_inds.size == 0:
+        return gt_infos
+
+    device = depth_entropy_map.device if isinstance(depth_entropy_map, torch.Tensor) else torch.device('cpu')
+    centers = torch.as_tensor(gt_boxes[candidate_inds, :3], device=device, dtype=torch.float32)
+
+    cur_depth_entropy = depth_entropy_map[batch_index]
+    cur_lidar2image = lidar2image[batch_index].to(torch.float32)
+    cur_img_aug_matrix = img_aug_matrix[batch_index].to(torch.float32)
+    cur_lidar_aug_matrix = lidar_aug_matrix[batch_index].to(torch.float32)
+
+    coords = centers.clone()
+    coords -= cur_lidar_aug_matrix[:3, 3]
+    coords = torch.inverse(cur_lidar_aug_matrix[:3, :3]).matmul(coords.transpose(1, 0))
+    coords = cur_lidar2image[:, :3, :3].matmul(coords)
+    coords += cur_lidar2image[:, :3, 3].reshape(-1, 3, 1)
+
+    raw_depth = coords[:, 2, :].clone()
+    coords[:, 2, :] = torch.clamp(coords[:, 2, :], 1e-5, 1e5)
+    coords[:, :2, :] /= coords[:, 2:3, :]
+
+    coords = cur_img_aug_matrix[:, :3, :3].matmul(coords)
+    coords += cur_img_aug_matrix[:, :3, 3].reshape(-1, 3, 1)
+    coords = coords[:, :2, :].transpose(1, 2)
+    coords = coords[..., [1, 0]]
+
+    if 'camera_imgs' in batch_dict:
+        img_h, img_w = batch_dict['camera_imgs'].shape[-2:]
+    else:
+        img_h, img_w = cfg.MODEL.VTRANSFORM.IMAGE_SIZE
+    feat_h, feat_w = cur_depth_entropy.shape[-2:]
+
+    on_img = (
+        (raw_depth > 1e-5)
+        & (coords[..., 0] >= 0) & (coords[..., 0] < img_h)
+        & (coords[..., 1] >= 0) & (coords[..., 1] < img_w)
+    )
+
+    feat_y = torch.clamp((coords[..., 0] / max(float(img_h), 1.0) * feat_h).long(), min=0, max=feat_h - 1)
+    feat_x = torch.clamp((coords[..., 1] / max(float(img_w), 1.0) * feat_w).long(), min=0, max=feat_w - 1)
+
+    keep_mask = np.ones(gt_boxes.shape[0], dtype=bool)
+    for local_idx, global_idx in enumerate(candidate_inds.tolist()):
+        cls_id = int(labels[global_idx])
+        cls_name = cfg.CLASS_NAMES[cls_id - 1] if 1 <= cls_id <= len(cfg.CLASS_NAMES) else None
+        cur_entropy_thresh = float(class_entropy_thresh_cfg.get(cls_name, entropy_thresh)) if cls_name is not None else entropy_thresh
+
+        cam_mask = on_img[:, local_idx]
+        if cam_mask.sum().item() == 0:
+            continue
+
+        cam_entropy = cur_depth_entropy[cam_mask, feat_y[cam_mask, local_idx], feat_x[cam_mask, local_idx]]
+        cam_entropy = cam_entropy[torch.isfinite(cam_entropy)]
+        if cam_entropy.numel() == 0:
+            continue
+
+        if multi_cam_reduce == 'mean':
+            depth_entropy = cam_entropy.mean()
+        elif multi_cam_reduce == 'max':
+            depth_entropy = cam_entropy.max()
+        else:
+            depth_entropy = cam_entropy.min()
+
+        if float(depth_entropy.item()) > cur_entropy_thresh:
             keep_mask[global_idx] = False
 
     if keep_mask.all():

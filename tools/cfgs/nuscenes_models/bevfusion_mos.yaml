@@ -131,6 +131,9 @@ MODEL:
 
     FORWARD_ONLY_CONFLICT_ANALYSIS:
         ENABLED: False
+
+    DEPTH_ENTROPY_ANALYSIS:
+        ENABLED: False
     
     BACKBONE_2D:
         NAME: BaseBEVBackbone
@@ -274,6 +277,17 @@ SELF_TRAIN:
             pedestrian: 0.24
             traffic_cone: 0.34
         MULTI_CAM_REDUCE: max
+
+    # 从现有 LSS depth posterior 派生的 entropy 过滤；默认关闭，先用于 ablation。
+    DEPTH_ENTROPY_FILTER:
+        ENABLED: False
+        TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+        MODE: center_entropy
+        ENTROPY_THRESH: 0.65
+        CLASS_ENTROPY_THRESH:
+            pedestrian: 0.65
+            traffic_cone: 0.65
+        MULTI_CAM_REDUCE: min
 
     CONFLICT_FILTER:
         ENABLED: True

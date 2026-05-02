@@ -252,6 +252,9 @@ class DepthLSSTransform(nn.Module):
         # use points depth to assist the depth prediction in images
         x, depth_prob = self.get_cam_feats(img, depth)
         batch_dict['depth_conf_map'] = depth_prob.max(dim=2)[0]
+        depth_entropy = -(depth_prob * torch.log(depth_prob.clamp(min=1e-6))).sum(dim=2)
+        depth_entropy = depth_entropy / torch.log(depth_prob.new_tensor(float(self.D)))
+        batch_dict['depth_entropy_map'] = depth_entropy
         x = self.bev_pool(geom, x)
         x = self.downsample(x)
         # convert bev features from (b, c, x, y) to (b, c, y, x)
