@@ -40,6 +40,7 @@ wandb/
 *.log
 tmp/
 temp/
+fog_s3_conflict_probe/
 
 # Checkpoints / pretrained weights
 *.pth
