@@ -1,5 +1,28 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_geometry_probe||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-05-05T23:34:08",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/default",
+    "extra_tag": "default",
+    "eval_tag": "fog_s3_geometry_probe",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_geometry_probe",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.6559002672024522,
+      "mAP": 0.6136472396828133
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_geometry_probe/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_object_depth_entropy||checkpoint_epoch_10.pth||single_eval",
     "updated_at": "2026-05-02T21:44:58",
     "source": "tools/test.py",
