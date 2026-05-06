@@ -139,8 +139,10 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 2. **Forward-only pseudo-label quality ablation**
    - `F1 + D1.3`
    - `F1 + D1.3 + point-density only`
-   - `F1 + D1.3 + geometry verifier` (`N_pts + rho_pts + z_span/z_var`)
-   - `F1 + D1.3 + geometry verifier + entropy auxiliary`
+   - `F1 + relaxed score + geometry verifier` (`rho_pts + z_span` first)
+   - `F1 + relaxed score + geometry verifier + entropy auxiliary`
+
+   `fog_s3_geometry_probe` 显示当前 `D1.3` 高分框本身已经具有约 `95%` 量级的 2m TP proxy，因此第一版 verifier 不应主要做高分 hard filtering，而应验证低分 ignored boxes 的几何可信召回能力。
 
 3. **短 TTA 验证**
    - 只有当 pseudo-label precision / retained count / FP 控制改善后，才跑 `fog s3` TTA；
@@ -167,7 +169,7 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 - NDS / mAP；
 - `pedestrian` 与 `traffic_cone` 的 per-class AP；
 - pseudo-label precision / retained count；
-- 被 geometry verifier 筛掉的低质量框比例；
+- geometry verifier 从低分 ignored boxes 中恢复的候选数、TP proxy、retained count；
 - `pedestrian` / `traffic_cone` 的 `N_pts`、`rho_pts`、`z_span`、`z_var` 的 TP/FP 分布差异；
 - TTA 早期 iter 是否优于最终 epoch。
 

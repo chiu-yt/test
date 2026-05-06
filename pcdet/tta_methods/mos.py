@@ -796,6 +796,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             NEW_PSEUDO_LABELS[fid] = _apply_depth_uncertainty_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
             NEW_PSEUDO_LABELS[fid] = _apply_depth_entropy_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
             NEW_PSEUDO_LABELS[fid] = _apply_multimodal_conflict_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
+            NEW_PSEUDO_LABELS[fid] = _apply_geometry_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
 
     # A11: 前置质量过滤（按类别 Top-K 限流，重点约束长尾高噪类）
     frame_ids = input_dict.get('frame_id', [])
@@ -1269,6 +1270,139 @@ def _apply_multimodal_conflict_filter(gt_infos, batch_dict, batch_index):
         'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
         'memory_counter': gt_infos['memory_counter'][keep_mask]
     }
+    return filtered_infos
+
+
+def _class_cfg_value(class_cfg, cls_name, default_value):
+    if class_cfg is None:
+        return default_value
+    return class_cfg.get(cls_name, default_value)
+
+
+def _apply_geometry_filter(gt_infos, batch_dict, batch_index):
+    """
+    LiDAR geometry verifier for score-relaxed pseudo labels.
+
+    Existing score filtering has already marked boxes below SELF_TRAIN.SCORE_THRESH
+    as negative labels. This verifier only promotes target-class negative boxes back
+    to positive labels when they have enough LiDAR geometric support.
+    """
+    geometry_cfg = cfg.SELF_TRAIN.get('GEOMETRY_FILTER', None)
+    if geometry_cfg is None or not geometry_cfg.get('ENABLED', False):
+        return gt_infos
+
+    mode = str(geometry_cfg.get('MODE', 'score_relax_verify')).lower()
+    if mode != 'score_relax_verify':
+        raise ValueError('Unsupported GEOMETRY_FILTER.MODE: %s' % mode)
+
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    if gt_boxes is None or len(gt_boxes) == 0:
+        return gt_infos
+
+    points = batch_dict.get('points', None)
+    if points is None or points.shape[0] == 0:
+        return gt_infos
+
+    target_names = set(geometry_cfg.get('TARGET_CLASSES', ['pedestrian', 'traffic_cone']))
+    target_ids = [i + 1 for i, name in enumerate(cfg.CLASS_NAMES) if name in target_names]
+    if len(target_ids) == 0:
+        return gt_infos
+
+    labels = gt_boxes[:, 7].astype(np.int64)
+    abs_labels = np.abs(labels)
+    scores = gt_boxes[:, 8] if gt_boxes.shape[1] > 8 else np.ones(gt_boxes.shape[0], dtype=np.float32)
+    target_mask = np.isin(abs_labels, np.array(target_ids, dtype=np.int64))
+    negative_mask = labels < 0
+    finite_box_mask = np.isfinite(gt_boxes[:, :7]).all(axis=1) & (gt_boxes[:, 3:6] > 0).all(axis=1)
+
+    default_score_thresh = cfg.SELF_TRAIN.get('SCORE_THRESH', None)
+    relaxed_score_cfg = geometry_cfg.get('RELAXED_SCORE', {})
+    point_count_min_cfg = geometry_cfg.get('POINT_COUNT_MIN', {})
+    density_min_cfg = geometry_cfg.get('POINT_DENSITY_MIN', {})
+    z_span_min_cfg = geometry_cfg.get('Z_SPAN_MIN', {})
+    z_var_min_cfg = geometry_cfg.get('Z_VAR_MIN', {})
+    use_z_var = bool(geometry_cfg.get('USE_Z_VAR', False))
+    default_relaxed_score = float(geometry_cfg.get('DEFAULT_RELAXED_SCORE', 0.10))
+    default_point_count_min = int(geometry_cfg.get('DEFAULT_POINT_COUNT_MIN', 0))
+    default_density_min = float(geometry_cfg.get('DEFAULT_POINT_DENSITY_MIN', 30.0))
+    default_z_span_min = float(geometry_cfg.get('DEFAULT_Z_SPAN_MIN', 1.0))
+    default_z_var_min = float(geometry_cfg.get('DEFAULT_Z_VAR_MIN', 0.0))
+
+    candidate_mask = target_mask & negative_mask & finite_box_mask
+    for idx in np.where(candidate_mask)[0].tolist():
+        cls_id = int(abs_labels[idx])
+        cls_name = cfg.CLASS_NAMES[cls_id - 1]
+        score_thresh = None
+        if default_score_thresh is not None and 1 <= cls_id <= len(default_score_thresh):
+            score_thresh = float(default_score_thresh[cls_id - 1])
+        if score_thresh is None:
+            score_thresh = 0.25
+
+        relaxed_score = float(_class_cfg_value(relaxed_score_cfg, cls_name, default_relaxed_score))
+        if scores[idx] < relaxed_score or scores[idx] >= score_thresh:
+            candidate_mask[idx] = False
+
+    candidate_inds = np.where(candidate_mask)[0]
+    if candidate_inds.size == 0:
+        return gt_infos
+
+    from pcdet.ops.roiaware_pool3d import roiaware_pool3d_utils
+
+    if not isinstance(points, torch.Tensor):
+        points = torch.as_tensor(points)
+    batch_mask = points[:, 0].long() == batch_index
+    cur_points = points[batch_mask, 1:4]
+    if cur_points.shape[0] == 0:
+        return gt_infos
+
+    candidate_boxes = torch.as_tensor(gt_boxes[candidate_inds, :7], dtype=torch.float32)
+    point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
+        cur_points.detach().cpu(), candidate_boxes.detach().cpu()
+    )
+    if not isinstance(point_indices, torch.Tensor):
+        point_indices = torch.from_numpy(point_indices)
+
+    cur_points_cpu = cur_points.detach().cpu()
+    promoted = []
+    for local_idx, global_idx in enumerate(candidate_inds.tolist()):
+        cls_id = int(abs_labels[global_idx])
+        cls_name = cfg.CLASS_NAMES[cls_id - 1]
+        point_count_min = int(_class_cfg_value(point_count_min_cfg, cls_name, default_point_count_min))
+        density_min = float(_class_cfg_value(density_min_cfg, cls_name, default_density_min))
+        z_span_min = float(_class_cfg_value(z_span_min_cfg, cls_name, default_z_span_min))
+        z_var_min = float(_class_cfg_value(z_var_min_cfg, cls_name, default_z_var_min))
+
+        inside_mask = point_indices[local_idx] > 0
+        point_count = int(inside_mask.sum().item())
+        if point_count < point_count_min:
+            continue
+
+        volume = float(np.prod(gt_boxes[global_idx, 3:6]))
+        point_density = float(point_count / max(volume, 1e-6))
+        if point_density < density_min:
+            continue
+
+        if point_count == 0:
+            continue
+        inside_z = cur_points_cpu[inside_mask, 2].float()
+        z_span = float((inside_z.max() - inside_z.min()).item())
+        if z_span < z_span_min:
+            continue
+
+        if use_z_var:
+            z_var = float(inside_z.var(unbiased=False).item())
+            if z_var < z_var_min:
+                continue
+
+        promoted.append(global_idx)
+
+    if len(promoted) == 0:
+        return gt_infos
+
+    filtered_infos = dict(gt_infos)
+    filtered_boxes = gt_boxes.copy()
+    filtered_boxes[np.array(promoted, dtype=np.int64), 7] = np.abs(filtered_boxes[np.array(promoted, dtype=np.int64), 7])
+    filtered_infos['gt_boxes'] = filtered_boxes
     return filtered_infos
 
 

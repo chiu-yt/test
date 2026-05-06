@@ -74,7 +74,9 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var) * exp(-lambda * H_depth(i
 
 文献检索补充：depth posterior 与 uncertainty/entropy weighting 有相关先例，但未发现直接把 BEVFusion depth-bin entropy 用于 3D pseudo-label filtering 的标准做法。因此后续写作应强调“从已有 LSS depth posterior 中派生 zero-cost uncertainty”，而不是宣称该用法已是 BEVFusion 常规实践。
 
-近期实验顺序：先在 `fog s3 full-val` 上用 `pcdet.ops.roiaware_pool3d` 提取 fused pseudo boxes 内点云，做 `N_pts / rho_pts / z_span / z_var` 的 TP/FP proxy 分布验证；若 `pedestrian` / `traffic_cone` 的 precision、retained-count 或误报控制改善，再做 point-density-only / geometry-only 伪标签质量 ablation；combined geometry+entropy 只作为后续辅助对照；最后才跑短 `fog s3` TTA 与 `fog s5` 确认。
+`fog_s3_geometry_probe` 已完成，正常 fused 指标保持稳定：`NDS=0.6559`, `mAP=0.6136`。全量 `score>=0.1` proposal 上，`pedestrian` / `traffic_cone` 的 TP proxy 在 `point_count`、`point_density`、`z_span` 上均明显高于 FP，说明 LiDAR geometry verification 是正向信号；但按当前 `D1.3` 阈值筛选后，高分伪标签已经很干净：`pedestrian score>=0.24` 的 2m TP proxy 约 `0.9488`，`traffic_cone score>=0.34` 约 `0.9605`。因此下一步不应在高分框上继续硬过滤，而应做 **score relaxation + geometry verification**：保留当前高分框不动，仅把低分 ignored boxes 中 LiDAR 几何可信的 `pedestrian` / `traffic_cone` 提升为正伪标签。
+
+第一版落地为 disabled-by-default `SELF_TRAIN.GEOMETRY_FILTER`：`MODE=score_relax_verify`，`pedestrian relaxed_score=0.10`，`traffic_cone relaxed_score=0.14`（受 `NEG_THRESH` 下限约束），`point_density_min=30.0`，`z_span_min=1.0`，`z_var` 与 entropy 暂不作为主 gate。近期实验顺序：先做 forward-only pseudo-label quality ablation 比较 `F1 + D1.3` vs `F1 + relaxed score + geometry verifier`，若 retained-count 增加且 precision 仍稳定，再跑短 `fog s3` TTA；`fog s3` 成立后才确认 `fog s5`。
 
 ## 1. 研究背景与问题定义
 

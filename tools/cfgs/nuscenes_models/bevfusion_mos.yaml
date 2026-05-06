@@ -293,6 +293,28 @@ SELF_TRAIN:
             traffic_cone: 0.65
         MULTI_CAM_REDUCE: min
 
+    # Geometry-first score relaxation: disabled by default.
+    # Existing D1.3 high-score pseudo labels are already high precision; this only
+    # promotes low-score ignored boxes when LiDAR geometry verifies them.
+    GEOMETRY_FILTER:
+        ENABLED: False
+        TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+        MODE: score_relax_verify
+        DEFAULT_RELAXED_SCORE: 0.10
+        DEFAULT_POINT_COUNT_MIN: 0
+        DEFAULT_POINT_DENSITY_MIN: 30.0
+        DEFAULT_Z_SPAN_MIN: 1.0
+        USE_Z_VAR: False
+        RELAXED_SCORE:
+            pedestrian: 0.10
+            traffic_cone: 0.14  # effective lower bound is SELF_TRAIN.NEG_THRESH for this class
+        POINT_DENSITY_MIN:
+            pedestrian: 30.0
+            traffic_cone: 30.0
+        Z_SPAN_MIN:
+            pedestrian: 1.0
+            traffic_cone: 1.0
+
     CONFLICT_FILTER:
         ENABLED: True
         TARGET_CLASSES: ['pedestrian', 'traffic_cone']

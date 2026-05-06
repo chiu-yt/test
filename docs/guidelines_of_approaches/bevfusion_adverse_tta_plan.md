@@ -574,8 +574,8 @@
 5. 再比较伪标签可靠性版本：
    - `F1 + D1.3`
    - `F1 + D1.3 + point-density only`
-   - `F1 + D1.3 + geometry verifier`
-   - `F1 + D1.3 + geometry verifier + entropy auxiliary`
+   - `F1 + relaxed score + geometry verifier`
+   - `F1 + relaxed score + geometry verifier + entropy auxiliary`
 6. 若伪标签 precision / retained-count / 高噪类误报控制在 `fog s3` 上改善，再跑短 TTA；
 7. 若 `s3` 上成立，再在 `s5` 上做强退化确认。
 
@@ -590,6 +590,8 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 - `N_pts` 与 `rho_pts` 用于区分真实目标的稳定点云支撑与大体积稀疏噪声簇；
 - `z_span` / `z_var` 用于验证真实目标 surface reflection 的垂直延展，与 fog volumetric scattering 的悬浮/扁平簇区分；
 - `H_depth(i)` 来自现有 LSS depth probability 的归一化熵，但 object-level probe 已显示 entropy-only 信号弱且方向混合，因此只作为 combined ablation 的辅助项。
+
+`fog_s3_geometry_probe` 的关键补充结论：全量低分 proposal 上 geometry 能明显区分 TP/FP proxy，但当前 `D1.3` 高分伪标签的 2m TP proxy 已经约为 `pedestrian=0.9488`、`traffic_cone=0.9605`。因此第一版方法不应主要在高分框上继续 hard filter，而应做 **score relaxation + geometry verification**：保持现有高分框不动，只把低分 ignored boxes 中满足 `point_density_min=30.0` 与 `z_span_min=1.0` 的高噪类框恢复为正伪标签。由于 `traffic_cone` 的 `NEG_THRESH=0.14`，它的有效 relaxed lower bound 为 `0.14`，不是 `0.10`。
 
 文献表述边界：LSS / BEVDepth / BEVFusion 已有离散 depth posterior，单目 3D 检测与 TTA 中也有 uncertainty / entropy weighting 先例；但目前不要声称 BEVFusion 标准做法已经用 depth-bin entropy 过滤 3D pseudo labels。更稳妥的表述是：从已有 depth posterior 中派生一个 zero-cost uncertainty score。
 
