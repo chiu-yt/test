@@ -1,5 +1,28 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta/eval/eval_all_default/fog_s3_geom_relax_tta_eval||checkpoint_iter_0||best_summary",
+    "updated_at": "2026-05-10T18:41:37",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/fog_s3_geom_relax_tta",
+    "extra_tag": "fog_s3_geom_relax_tta",
+    "eval_tag": "fog_s3_geom_relax_tta_eval",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "best_summary",
+    "eval_all": true,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta/eval/eval_all_default/fog_s3_geom_relax_tta_eval",
+    "ckpt_type": "iter",
+    "ckpt_id": 0,
+    "ckpt_label": "checkpoint_iter_0",
+    "metrics": {
+      "NDS": 0.0,
+      "mAP": 0.0
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta/eval/eval_all_default/fog_s3_geom_relax_tta_eval/iter_0/val/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_geometry_probe||checkpoint_epoch_10.pth||single_eval",
     "updated_at": "2026-05-05T23:34:08",
     "source": "tools/test.py",
