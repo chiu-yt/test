@@ -148,6 +148,8 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
    - 只有当 pseudo-label precision / retained count / FP 控制改善后，才跑 `fog s3` TTA；
    - `fog s3` 成立后，再用 `fog s5` 做强退化确认。
 
+   初版 `score relaxation + geometry verifier` 的 `fog s3` 短 TTA 已显示 best 仍停在 `iter_0`，说明单纯进入自训练没有带来增益。下一步评价重点应从最终 NDS 暂时前移到训练期伪标签诊断：`ignored_relaxed`、`promoted`、`promote_rate`，以及 promoted boxes 的 `point_density / z_span` 分布。
+
 ---
 
 ## 五、实验设计
@@ -170,6 +172,7 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 - `pedestrian` 与 `traffic_cone` 的 per-class AP；
 - pseudo-label precision / retained count；
 - geometry verifier 从低分 ignored boxes 中恢复的候选数、TP proxy、retained count；
+- 训练期 `geom_filter/*` 统计：低分候选数、恢复数、恢复率、恢复框几何均值；
 - `pedestrian` / `traffic_cone` 的 `N_pts`、`rho_pts`、`z_span`、`z_var` 的 TP/FP 分布差异；
 - TTA 早期 iter 是否优于最终 epoch。
 

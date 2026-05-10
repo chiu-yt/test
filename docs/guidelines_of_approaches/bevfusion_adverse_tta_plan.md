@@ -593,6 +593,8 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 
 `fog_s3_geometry_probe` 的关键补充结论：全量低分 proposal 上 geometry 能明显区分 TP/FP proxy，但当前 `D1.3` 高分伪标签的 2m TP proxy 已经约为 `pedestrian=0.9488`、`traffic_cone=0.9605`。因此第一版方法不应主要在高分框上继续 hard filter，而应做 **score relaxation + geometry verification**：保持现有高分框不动，只把低分 ignored boxes 中满足 `point_density_min=30.0` 与 `z_span_min=1.0` 的高噪类框恢复为正伪标签。由于 `traffic_cone` 的 `NEG_THRESH=0.14`，它的有效 relaxed lower bound 为 `0.14`，不是 `0.10`。
 
+`fog_s3_geom_relax_tta_ckpt` 的短 TTA 结果显示：修正 checkpoint 加载后 `iter_0` 正常，但 best 仍为 `iter_0`，后续 iter 没有提升。因此不要继续盲目加 epoch；下一步应启用训练期 `geom_filter/*` 诊断，先确认每步 `ignored_relaxed -> promoted` 的实际数量。如果 `promote_rate` 很低，优先放宽 `z_span_min / point_density_min`；如果 promoted 数量可观但指标不涨，则说明新增低分监督仍不够可靠，应回到 forward-only pseudo-label quality 分析而不是继续 TTA。
+
 文献表述边界：LSS / BEVDepth / BEVFusion 已有离散 depth posterior，单目 3D 检测与 TTA 中也有 uncertainty / entropy weighting 先例；但目前不要声称 BEVFusion 标准做法已经用 depth-bin entropy 过滤 3D pseudo labels。更稳妥的表述是：从已有 depth posterior 中派生一个 zero-cost uncertainty score。
 
 物理叙事边界：surface reflection vs volumetric scattering 是下一步 probe 的科学假设，不应在实验前写成已验证结论。只有当 `N_pts / rho_pts / z_span / z_var` 在 `pedestrian` 与 `traffic_cone` 的 TP/FP proxy 上呈现稳定分离后，才能把 geometry verifier 写成主方法。

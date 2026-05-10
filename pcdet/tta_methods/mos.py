@@ -19,6 +19,7 @@ from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
 # Global Cache (Module Level)
 PSEUDO_LABELS = {}
 NEW_PSEUDO_LABELS = {}
+GEOMETRY_FILTER_STATS = {}
 
 class MOS(object):
     def __init__(self, model, tta_cfg, logger, dataset=None): # 添加 dataset 参数
@@ -133,6 +134,8 @@ class MOS(object):
                 save_pseudo_label_batch(batch_dict, p_dicts, need_update=need_update)
             del super_model
 
+        geometry_filter_stats = _get_geometry_filter_stats()
+
         # 5. Inject Pseudo Labels into Batch
         self._inject_pseudo_labels(batch_dict)
 
@@ -212,6 +215,7 @@ class MOS(object):
             tb_dict['tail_ps/bus'] = float(pseudo_hist.get('bus', 0))
             tb_dict['tail_ps/trailer'] = float(pseudo_hist.get('trailer', 0))
             tb_dict['tail_ps/traffic_cone'] = float(pseudo_hist.get('traffic_cone', 0))
+            _add_geometry_filter_stats_to_logs(geometry_filter_stats, tb_dict, disp_dict)
 
         if self.rank == 0 and (self.total_samples_seen % 50 == 0):
             self.logger.info(
@@ -784,6 +788,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
     2) 若启用 MEMORY_ENSEMBLE 且 need_update=True，则与历史伪标签融合
     """
     global NEW_PSEUDO_LABELS, PSEUDO_LABELS
+    _reset_geometry_filter_stats()
 
     # 先生成当前 batch 的原始伪标签
     NEW_PSEUDO_LABELS = memory_ensemble_utils.save_pseudo_label_batch(input_dict, NEW_PSEUDO_LABELS, pred_dicts)
@@ -1279,6 +1284,66 @@ def _class_cfg_value(class_cfg, cls_name, default_value):
     return class_cfg.get(cls_name, default_value)
 
 
+def _reset_geometry_filter_stats():
+    global GEOMETRY_FILTER_STATS
+    GEOMETRY_FILTER_STATS = {}
+
+
+def _new_geometry_filter_class_stats():
+    return {
+        'positive_before': 0,
+        'ignored_relaxed': 0,
+        'promoted': 0,
+        'promoted_score_sum': 0.0,
+        'promoted_density_sum': 0.0,
+        'promoted_z_span_sum': 0.0,
+    }
+
+
+def _geometry_filter_class_stats(cls_name):
+    if cls_name not in GEOMETRY_FILTER_STATS:
+        GEOMETRY_FILTER_STATS[cls_name] = _new_geometry_filter_class_stats()
+    return GEOMETRY_FILTER_STATS[cls_name]
+
+
+def _get_geometry_filter_stats():
+    return copy.deepcopy(GEOMETRY_FILTER_STATS)
+
+
+def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
+    if not stats:
+        return
+
+    total_promoted = 0
+    disp_parts = []
+    for cls_name, cls_stats in stats.items():
+        positive_before = float(cls_stats.get('positive_before', 0))
+        ignored_relaxed = float(cls_stats.get('ignored_relaxed', 0))
+        promoted = float(cls_stats.get('promoted', 0))
+        total_promoted += int(promoted)
+
+        prefix = 'geom_filter/%s' % cls_name
+        tb_dict['%s_positive_before' % prefix] = positive_before
+        tb_dict['%s_ignored_relaxed' % prefix] = ignored_relaxed
+        tb_dict['%s_promoted' % prefix] = promoted
+        tb_dict['%s_promote_rate' % prefix] = promoted / max(ignored_relaxed, 1.0)
+
+        if promoted > 0:
+            tb_dict['%s_promoted_score_mean' % prefix] = float(cls_stats.get('promoted_score_sum', 0.0)) / promoted
+            tb_dict['%s_promoted_density_mean' % prefix] = float(cls_stats.get('promoted_density_sum', 0.0)) / promoted
+            tb_dict['%s_promoted_z_span_mean' % prefix] = float(cls_stats.get('promoted_z_span_sum', 0.0)) / promoted
+        else:
+            tb_dict['%s_promoted_score_mean' % prefix] = 0.0
+            tb_dict['%s_promoted_density_mean' % prefix] = 0.0
+            tb_dict['%s_promoted_z_span_mean' % prefix] = 0.0
+
+        short_name = 'ped' if cls_name == 'pedestrian' else 'cone' if cls_name == 'traffic_cone' else cls_name[:4]
+        disp_parts.append('%s:%d/%d' % (short_name, int(promoted), int(ignored_relaxed)))
+
+    tb_dict['geom_filter/total_promoted'] = float(total_promoted)
+    disp_dict['geom_promote'] = ','.join(disp_parts)
+
+
 def _apply_geometry_filter(gt_infos, batch_dict, batch_index):
     """
     LiDAR geometry verifier for score-relaxed pseudo labels.
@@ -1328,6 +1393,11 @@ def _apply_geometry_filter(gt_infos, batch_dict, batch_index):
     default_z_span_min = float(geometry_cfg.get('DEFAULT_Z_SPAN_MIN', 1.0))
     default_z_var_min = float(geometry_cfg.get('DEFAULT_Z_VAR_MIN', 0.0))
 
+    for cls_id in target_ids:
+        cls_name = cfg.CLASS_NAMES[cls_id - 1]
+        cls_stats = _geometry_filter_class_stats(cls_name)
+        cls_stats['positive_before'] += int(((labels == cls_id) & finite_box_mask).sum())
+
     candidate_mask = target_mask & negative_mask & finite_box_mask
     for idx in np.where(candidate_mask)[0].tolist():
         cls_id = int(abs_labels[idx])
@@ -1341,6 +1411,8 @@ def _apply_geometry_filter(gt_infos, batch_dict, batch_index):
         relaxed_score = float(_class_cfg_value(relaxed_score_cfg, cls_name, default_relaxed_score))
         if scores[idx] < relaxed_score or scores[idx] >= score_thresh:
             candidate_mask[idx] = False
+        else:
+            _geometry_filter_class_stats(cls_name)['ignored_relaxed'] += 1
 
     candidate_inds = np.where(candidate_mask)[0]
     if candidate_inds.size == 0:
@@ -1395,6 +1467,11 @@ def _apply_geometry_filter(gt_infos, batch_dict, batch_index):
                 continue
 
         promoted.append(global_idx)
+        cls_stats = _geometry_filter_class_stats(cls_name)
+        cls_stats['promoted'] += 1
+        cls_stats['promoted_score_sum'] += float(scores[global_idx])
+        cls_stats['promoted_density_sum'] += point_density
+        cls_stats['promoted_z_span_sum'] += z_span
 
     if len(promoted) == 0:
         return gt_infos

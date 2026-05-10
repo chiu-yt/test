@@ -40,9 +40,11 @@ wandb/
 *.log
 tmp/
 temp/
+.sisyphus/
 fog_s3_conflict_probe/
 depth_entropy/
 geometry probe/
+fog_s3_geom_relax_tta_eval/
 
 # Checkpoints / pretrained weights
 *.pth
