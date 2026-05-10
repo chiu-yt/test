@@ -3,6 +3,9 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
+- `2026-05-10 22:18:07` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_geom_relax_tta_ckpt` `best_iter=0` `NDS=0.6566 mAP=0.6138 promoted=no`
+  - exp: `bevfusion_mos/fog_s3_geom_relax_tta_ckpt`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta_ckpt/eval/eval_with_train`
 - `2026-05-10 18:41:37` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_geom_relax_tta` `best_iter=0` `NDS=0.0000 mAP=0.0000 promoted=no`
   - exp: `bevfusion_mos/fog_s3_geom_relax_tta`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta/eval/eval_all_default/fog_s3_geom_relax_tta_eval`
@@ -36,9 +39,6 @@
 - `2026-04-19 20:02:21` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_lidar_s3_fullval` `best_epoch=10` `NDS=0.6563 mAP=0.6134 promoted=no`
   - exp: `bevfusion_mos/fog_image_lidar_s3_fullval`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_lidar_s3_fullval/eval/epoch_10/val/fog_image_lidar_s3_fullval`
-- `2026-04-19 19:32:35` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_image_s3_fullval` `best_epoch=10` `NDS=0.6655 mAP=0.6278 promoted=no`
-  - exp: `bevfusion_mos/fog_image_s3_fullval`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_image_s3_fullval/eval/epoch_10/val/fog_image_s3_fullval`
 <!-- AUTO-EXPERIMENT-LOG:END -->
 
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
