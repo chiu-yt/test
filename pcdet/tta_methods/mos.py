@@ -789,6 +789,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
     """
     global NEW_PSEUDO_LABELS, PSEUDO_LABELS
     _reset_geometry_filter_stats()
+    _update_raw_geometry_filter_stats(input_dict, pred_dicts)
 
     # 先生成当前 batch 的原始伪标签
     NEW_PSEUDO_LABELS = memory_ensemble_utils.save_pseudo_label_batch(input_dict, NEW_PSEUDO_LABELS, pred_dicts)
@@ -1291,6 +1292,12 @@ def _reset_geometry_filter_stats():
 
 def _new_geometry_filter_class_stats():
     return {
+        'raw_total': 0,
+        'raw_below_neg': 0,
+        'raw_after_neg': 0,
+        'raw_relaxed_window': 0,
+        'raw_above_score': 0,
+        'raw_score_sum': 0.0,
         'positive_before': 0,
         'ignored_relaxed': 0,
         'promoted': 0,
@@ -1310,6 +1317,49 @@ def _get_geometry_filter_stats():
     return copy.deepcopy(GEOMETRY_FILTER_STATS)
 
 
+def _update_raw_geometry_filter_stats(input_dict, pred_dicts):
+    geometry_cfg = cfg.SELF_TRAIN.get('GEOMETRY_FILTER', None)
+    if geometry_cfg is None or not geometry_cfg.get('ENABLED', False):
+        return
+    if pred_dicts is None:
+        return
+
+    target_names = set(geometry_cfg.get('TARGET_CLASSES', ['pedestrian', 'traffic_cone']))
+    target_ids = [i + 1 for i, name in enumerate(cfg.CLASS_NAMES) if name in target_names]
+    if len(target_ids) == 0:
+        return
+
+    score_thresh_arr = cfg.SELF_TRAIN.get('SCORE_THRESH', None)
+    neg_thresh_arr = cfg.SELF_TRAIN.get('NEG_THRESH', None)
+    relaxed_score_cfg = geometry_cfg.get('RELAXED_SCORE', {})
+    default_relaxed_score = float(geometry_cfg.get('DEFAULT_RELAXED_SCORE', 0.10))
+
+    for pred_dict in pred_dicts:
+        if 'pred_labels' not in pred_dict or 'pred_scores' not in pred_dict:
+            continue
+
+        pred_labels = pred_dict['pred_labels'].detach().cpu().numpy().astype(np.int64)
+        pred_scores = pred_dict['pred_scores'].detach().cpu().numpy().astype(np.float32)
+        for cls_id in target_ids:
+            cls_name = cfg.CLASS_NAMES[cls_id - 1]
+            cls_scores = pred_scores[pred_labels == cls_id]
+            cls_stats = _geometry_filter_class_stats(cls_name)
+            cls_stats['raw_total'] += int(cls_scores.shape[0])
+            if cls_scores.shape[0] == 0:
+                continue
+
+            cls_stats['raw_score_sum'] += float(cls_scores.sum())
+            neg_thresh = float(neg_thresh_arr[cls_id - 1]) if neg_thresh_arr is not None and 1 <= cls_id <= len(neg_thresh_arr) else 0.0
+            score_thresh = float(score_thresh_arr[cls_id - 1]) if score_thresh_arr is not None and 1 <= cls_id <= len(score_thresh_arr) else 0.25
+            relaxed_score = float(_class_cfg_value(relaxed_score_cfg, cls_name, default_relaxed_score))
+            relaxed_lower = max(neg_thresh, relaxed_score)
+
+            cls_stats['raw_below_neg'] += int((cls_scores < neg_thresh).sum())
+            cls_stats['raw_after_neg'] += int((cls_scores >= neg_thresh).sum())
+            cls_stats['raw_relaxed_window'] += int(((cls_scores >= relaxed_lower) & (cls_scores < score_thresh)).sum())
+            cls_stats['raw_above_score'] += int((cls_scores >= score_thresh).sum())
+
+
 def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
     if not stats:
         return
@@ -1317,12 +1367,21 @@ def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
     total_promoted = 0
     disp_parts = []
     for cls_name, cls_stats in stats.items():
+        raw_total = float(cls_stats.get('raw_total', 0))
+        raw_relaxed_window = float(cls_stats.get('raw_relaxed_window', 0))
         positive_before = float(cls_stats.get('positive_before', 0))
         ignored_relaxed = float(cls_stats.get('ignored_relaxed', 0))
         promoted = float(cls_stats.get('promoted', 0))
         total_promoted += int(promoted)
 
         prefix = 'geom_filter/%s' % cls_name
+        tb_dict['%s_raw_total' % prefix] = raw_total
+        tb_dict['%s_raw_below_neg' % prefix] = float(cls_stats.get('raw_below_neg', 0))
+        tb_dict['%s_raw_after_neg' % prefix] = float(cls_stats.get('raw_after_neg', 0))
+        tb_dict['%s_raw_relaxed_window' % prefix] = raw_relaxed_window
+        tb_dict['%s_raw_above_score' % prefix] = float(cls_stats.get('raw_above_score', 0))
+        tb_dict['%s_raw_relaxed_rate' % prefix] = raw_relaxed_window / max(raw_total, 1.0)
+        tb_dict['%s_raw_score_mean' % prefix] = float(cls_stats.get('raw_score_sum', 0.0)) / max(raw_total, 1.0)
         tb_dict['%s_positive_before' % prefix] = positive_before
         tb_dict['%s_ignored_relaxed' % prefix] = ignored_relaxed
         tb_dict['%s_promoted' % prefix] = promoted
@@ -1338,7 +1397,7 @@ def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
             tb_dict['%s_promoted_z_span_mean' % prefix] = 0.0
 
         short_name = 'ped' if cls_name == 'pedestrian' else 'cone' if cls_name == 'traffic_cone' else cls_name[:4]
-        disp_parts.append('%s:%d/%d' % (short_name, int(promoted), int(ignored_relaxed)))
+        disp_parts.append('%s:%d/%d|raw%d' % (short_name, int(promoted), int(ignored_relaxed), int(raw_relaxed_window)))
 
     tb_dict['geom_filter/total_promoted'] = float(total_promoted)
     disp_dict['geom_promote'] = ','.join(disp_parts)

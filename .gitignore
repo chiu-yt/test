@@ -45,6 +45,7 @@ fog_s3_conflict_probe/
 depth_entropy/
 geometry probe/
 fog_s3_geom_relax_tta_eval/
+fog_s3_geom_relax_lidar_only_diag/
 
 # Checkpoints / pretrained weights
 *.pth

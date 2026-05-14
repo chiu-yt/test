@@ -80,6 +80,8 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var) * exp(-lambda * H_depth(i
 
 `fog_s3_geom_relax_tta_ckpt` 修正加载方式后已完成自动评估：`iter_0` 正常恢复到 `NDS=0.6566`, `mAP=0.6138`，证明此前全 0 是未加载 baseline 权重导致；但 best 仍停在 `iter_0`，`iter_20/40/100/200` 均未超过初始化点。因此当前结论是 **geometry relax TTA 未带来训练增益**，下一步不应继续加 epoch，而要诊断 `GEOMETRY_FILTER` 实际恢复了多少低分框。已新增训练期 `geom_filter/*` 统计：按 `pedestrian` / `traffic_cone` 记录 `positive_before`、`ignored_relaxed`、`promoted`、`promote_rate` 以及 promoted score / density / z-span 均值，用于判断“恢复太少”还是“恢复了但监督无效”。
 
+`fog_s3_geom_relax_lidar_only_diag` 进一步确认：即使关闭 `DEPTH_FILTER` 与 `CONFLICT_FILTER`，`geom_filter/*` 里的 `ignored_relaxed` 与 `promoted` 仍然全为 0，说明当前几何 verifier 看到的候选窗口仍然为空，不是 `z_span / density` 门限本身没起作用。下一步应统计 raw pseudo labels 的 score 分布窗口，确认 `pedestrian / traffic_cone` 在 `NEG_THRESH` 与 `SCORE_THRESH` 之间到底有没有候选。
+
 ## 1. 研究背景与问题定义
 
 本阶段工作的出发点，是参考 MOS 在**单激光雷达**场景下表现较好的 test-time adaptation（TTA）/ self-training 思路，尝试将其迁移到 **OpenPCDet + BEVFusion** 的**多模态夜间场景**中，希望在 night domain 上继续提升检测性能，重点指标为 **NDS** 和 **mAP**。

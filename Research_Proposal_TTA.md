@@ -150,6 +150,8 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 
    初版 `score relaxation + geometry verifier` 的 `fog s3` 短 TTA 已显示 best 仍停在 `iter_0`，说明单纯进入自训练没有带来增益。下一步评价重点应从最终 NDS 暂时前移到训练期伪标签诊断：`ignored_relaxed`、`promoted`、`promote_rate`，以及 promoted boxes 的 `point_density / z_span` 分布。
 
+   进一步的 LiDAR-only 诊断显示，即使关闭 `DEPTH_FILTER` 和 `CONFLICT_FILTER`，`geom_filter/*` 里的 `ignored_relaxed` 与 `promoted` 仍然为 0，说明几何 verifier 的问题不是门限太严，而是 raw pseudo labels 里 target-class 候选窗口本身为空。下一步应改做 raw proposal 的 score-window 诊断，确认 `pedestrian / traffic_cone` 在 `NEG_THRESH` 与 `SCORE_THRESH` 之间的数量。
+
 ---
 
 ## 五、实验设计
