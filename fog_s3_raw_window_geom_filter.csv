@@ -1,0 +1,15 @@
+tag,step,value
+geom_filter/pedestrian_raw_total,MISSING,MISSING
+geom_filter/pedestrian_raw_below_neg,MISSING,MISSING
+geom_filter/pedestrian_raw_after_neg,MISSING,MISSING
+geom_filter/pedestrian_raw_relaxed_window,MISSING,MISSING
+geom_filter/pedestrian_raw_above_score,MISSING,MISSING
+geom_filter/pedestrian_ignored_relaxed,MISSING,MISSING
+geom_filter/pedestrian_promoted,MISSING,MISSING
+geom_filter/traffic_cone_raw_total,MISSING,MISSING
+geom_filter/traffic_cone_raw_below_neg,MISSING,MISSING
+geom_filter/traffic_cone_raw_after_neg,MISSING,MISSING
+geom_filter/traffic_cone_raw_relaxed_window,MISSING,MISSING
+geom_filter/traffic_cone_raw_above_score,MISSING,MISSING
+geom_filter/traffic_cone_ignored_relaxed,MISSING,MISSING
+geom_filter/traffic_cone_promoted,MISSING,MISSING
