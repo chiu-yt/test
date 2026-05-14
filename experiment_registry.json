@@ -1,5 +1,28 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_lidar_only_diag/eval/eval_with_train||checkpoint_iter_10||best_summary",
+    "updated_at": "2026-05-14T03:02:30",
+    "source": "tools/train.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/fog_s3_geom_relax_lidar_only_diag",
+    "extra_tag": "fog_s3_geom_relax_lidar_only_diag",
+    "eval_tag": null,
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "best_summary",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_lidar_only_diag",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_lidar_only_diag/eval/eval_with_train",
+    "ckpt_type": "iter",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_iter_10",
+    "metrics": {
+      "NDS": 0.6568766196045568,
+      "mAP": 0.6144461191526399
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_lidar_only_diag/eval/eval_with_train/iter_10/val/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_diag/eval/eval_with_train||checkpoint_iter_40||best_summary",
     "updated_at": "2026-05-11T20:51:12",
     "source": "tools/train.py",
