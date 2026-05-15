@@ -1,5 +1,28 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_window_diag/eval/eval_with_train||checkpoint_iter_100||best_summary",
+    "updated_at": "2026-05-15T15:57:51",
+    "source": "tools/train.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/fog_s3_raw_window_diag",
+    "extra_tag": "fog_s3_raw_window_diag",
+    "eval_tag": null,
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "best_summary",
+    "eval_all": false,
+    "output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_window_diag",
+    "eval_output_dir": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_window_diag/eval/eval_with_train",
+    "ckpt_type": "iter",
+    "ckpt_id": 100,
+    "ckpt_label": "checkpoint_iter_100",
+    "metrics": {
+      "NDS": 0.6585617109421606,
+      "mAP": 0.6162434688641377
+    },
+    "metrics_file": "/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_window_diag/eval/eval_with_train/iter_100/val/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_window_diag/eval/eval_with_train||checkpoint_iter_30||best_summary",
     "updated_at": "2026-05-14T20:51:58",
     "source": "tools/train.py",
