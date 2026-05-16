@@ -516,13 +516,17 @@
 
 > **LiDAR-anchored asymmetric pseudo-label reliability modeling for multimodal 3D TTA**
 
+当前一句话问题定义：
+
+> **恶劣天气非对称模态退化下，source-free BEVFusion TTA 如何不依赖 fused score、Camera entropy 或对称 LiDAR-Camera agreement，而是直接用 LiDAR 物理几何验证并复用低置信 fused pseudo labels？**
+
 也就是：
 
 - 不默认信任 fused pseudo labels；
 - 不再把 `B_L` 与 `B_C` 的几何距离作为核心可靠性信号；
 - 将 LiDAR 点云支持度作为几何锚点；
-- 将 LSS 深度分布熵作为 Camera / depth 不确定性惩罚；
-- 在不改预训练 BEVFusion 架构的前提下，对伪标签做过滤、降权或可靠性重分配。
+- 将 LSS 深度分布熵仅作为 secondary ablation，不再作为主可靠性信号；
+- 在不改预训练 BEVFusion 架构的前提下，直接从 raw proposals 中验证、恢复或重加权低置信伪标签。
 
 ### 15.2 一大创新 + 两个小创新的建议结构
 
@@ -534,8 +538,19 @@
 
 - 强 fog 下，fusion 结果可能比单模态更不可靠；
 - 但当前 probe 不支持“LiDAR/Camera 对称几何冲突距离”作为主信号；
-- 因此 TTA 不应无条件依赖 fused pseudo labels，而应使用 LiDAR 点云密度与 LSS depth entropy 估计其可靠性；
+- 因此 TTA 不应无条件依赖 fused pseudo labels，而应使用 LiDAR 点云密度、垂直跨度与点云支撑直接验证 raw low-score candidates；
 - 该方向保持 source-free / off-the-shelf BEVFusion 约束，不需要 GaussianLSS、EDL head 或 dual-expert 预训练。
+
+导师建议中的 **Physical-over-Semantic recall mining** 是合理包装：在严重模态退化下，语义分类分数可能压低真实目标候选，因此可用 LiDAR 物理几何对 low-score raw proposals 做召回挖掘。为避免被审稿人认为是 hard-threshold heuristic，方法应优先写成连续的 **Geometric Confidence Calibration**：
+
+```text
+G_density(i) = sigmoid(k * (rho_i - rho_th))
+G_z(i)       = sigmoid(m * (z_span_i - z_th))
+R_geo(i)     = G_density(i) * G_z(i)              # optional: * G_count(i)
+W_i          = max(Score_i, R_geo(i))
+```
+
+其中 `R_geo` 是软几何可靠性分数；hard promote 只作为实现变体或 ablation，不作为唯一方法表述。
 
 #### 小创新 1
 
@@ -550,14 +565,16 @@
 
 #### 小创新 2
 
-**Class-aware depth-aware denoising**
+**Class-aware raw reliability window**
 
-继续保留并整理当前已验证有效的：
+继续保留并整理当前已验证有效的高噪类边界：
 
 - `pedestrian`
 - `traffic_cone`
 
-高噪类深度过滤思路，将其作为类级别的 targeted denoising 支撑模块。
+`pedestrian` 当前有少量 raw relaxed candidates，适合优先做 direct geometry promote；`traffic_cone` 当前几乎全部低于 `NEG_THRESH`，应先作为极低分候选窗口诊断对象，而不是继续指望 ignored-box geometry gate。
+
+写作上应避免宣称“低分候选框中隐藏大量 TP”已经成立；更稳妥的说法是：raw-window 诊断发现 `pedestrian` 存在可被进一步验证的小规模低分候选，下一步需要用 TP/FP proxy 与短 TTA 验证其是否能转化为有效监督。
 
 ### 15.3 最优先的下一个方法实验
 
@@ -565,24 +582,25 @@
 
 1. 用 `fog s3 full-val` 作为主开发 benchmark；
 2. 以 `F1 + D1.3` 为 base；
-3. 先做 forward-only 伪标签质量验证，而不是直接跑完整 TTA；
-4. 先比较 LiDAR 几何物理特征在 TP/FP proxy 上的可分性：
+3. 先实现 direct raw-proposal geometry verification，而不是继续调 ignored-box gate；
+4. 先比较 raw low-score candidates 的 LiDAR 几何物理特征在 TP/FP proxy 上的可分性：
    - `N_pts`: pseudo box 内点数；
    - `rho_pts = N_pts / (l * w * h)`: 点密度；
    - `z_span = z_max - z_min`: 垂直跨度；
    - `z_var`: 垂直方差；
 5. 再比较伪标签可靠性版本：
    - `F1 + D1.3`
-   - `F1 + D1.3 + point-density only`
-   - `F1 + relaxed score + geometry verifier`
-   - `F1 + relaxed score + geometry verifier + entropy auxiliary`
-6. 若伪标签 precision / retained-count / 高噪类误报控制在 `fog s3` 上改善，再跑短 TTA；
+   - `F1 + raw_geometry_direct_promote`
+   - `F1 + raw_geometry_direct_reweight`
+   - `F1 + raw_geometry_direct_promote + entropy auxiliary`（只作后续 ablation）
+6. 若 raw promoted/reweighted candidates 的 precision / retained-count / 高噪类误报控制在 `fog s3` 上改善，再跑短 TTA；
 7. 若 `s3` 上成立，再在 `s5` 上做强退化确认。
 
 推荐的第一版可靠性形式从 entropy-first 改为 geometry-first：
 
 ```text
-W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
+R_geo(i) = G_density(i) * G_z(i)
+W_i = max(Score_i, R_geo(i))
 ```
 
 其中：
@@ -591,11 +609,13 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 - `z_span` / `z_var` 用于验证真实目标 surface reflection 的垂直延展，与 fog volumetric scattering 的悬浮/扁平簇区分；
 - `H_depth(i)` 来自现有 LSS depth probability 的归一化熵，但 object-level probe 已显示 entropy-only 信号弱且方向混合，因此只作为 combined ablation 的辅助项。
 
-`fog_s3_geometry_probe` 的关键补充结论：全量低分 proposal 上 geometry 能明显区分 TP/FP proxy，但当前 `D1.3` 高分伪标签的 2m TP proxy 已经约为 `pedestrian=0.9488`、`traffic_cone=0.9605`。因此第一版方法不应主要在高分框上继续 hard filter，而应做 **score relaxation + geometry verification**：保持现有高分框不动，只把低分 ignored boxes 中满足 `point_density_min=30.0` 与 `z_span_min=1.0` 的高噪类框恢复为正伪标签。由于 `traffic_cone` 的 `NEG_THRESH=0.14`，它的有效 relaxed lower bound 为 `0.14`，不是 `0.10`。
+`fog_s3_geometry_probe` 的关键补充结论：全量低分 proposal 上 geometry 能明显区分 TP/FP proxy，但当前 `D1.3` 高分伪标签的 2m TP proxy 已经约为 `pedestrian=0.9488`、`traffic_cone=0.9605`。因此第一版方法不应主要在高分框上继续 hard filter，而应做 **direct raw-proposal geometry promote/reweight**：保持现有高分框不动，在 raw `pred_dicts` 阶段抽取 target-class low-score candidates，用 `point_density` 与 `z_span` 验证后再追加或加权为正伪标签。
 
 `fog_s3_geom_relax_tta_ckpt` 的短 TTA 结果显示：修正 checkpoint 加载后 `iter_0` 正常，但 best 仍为 `iter_0`，后续 iter 没有提升。因此不要继续盲目加 epoch；下一步应启用训练期 `geom_filter/*` 诊断，先确认每步 `ignored_relaxed -> promoted` 的实际数量。如果 `promote_rate` 很低，优先放宽 `z_span_min / point_density_min`；如果 promoted 数量可观但指标不涨，则说明新增低分监督仍不够可靠，应回到 forward-only pseudo-label quality 分析而不是继续 TTA。
 
 `fog_s3_geom_relax_lidar_only_diag` 进一步确认：即使关闭 `DEPTH_FILTER` 和 `CONFLICT_FILTER`，`geom_filter/*` 里的 `ignored_relaxed` 与 `promoted` 仍然为 0。这说明当前几何 verifier 还没有拿到候选窗口，问题很可能出在 raw pseudo labels 的 score 分布而不是几何门限本身。下一步应补 raw proposal score-window 统计，确认 `pedestrian / traffic_cone` 在 `NEG_THRESH` 与 `SCORE_THRESH` 之间到底有没有足够候选。
+
+`fog_s3_raw_window_diag` 的最新结论进一步收敛了问题：`pedestrian` 有小规模 raw relaxed window（`raw_total=419`, `raw_after_neg=16`, `raw_relaxed_window=11`, `raw_above_score=5`），但 `ignored_relaxed=0`、`promoted=0`；`traffic_cone` 只有 `raw_total=12` 且全部低于 `NEG_THRESH`。因此下一步不要继续调 `point_density_min / z_span_min`，而要把 verifier 前移到 raw proposal 阶段，先验证 `pedestrian` direct promote/reweight 是否能产生高质量新增监督。
 
 文献表述边界：LSS / BEVDepth / BEVFusion 已有离散 depth posterior，单目 3D 检测与 TTA 中也有 uncertainty / entropy weighting 先例；但目前不要声称 BEVFusion 标准做法已经用 depth-bin entropy 过滤 3D pseudo labels。更稳妥的表述是：从已有 depth posterior 中派生一个 zero-cost uncertainty score。
 

@@ -34,7 +34,7 @@ full-val source-only benchmark 已得到以下关键事实：
 
 因此，当前更准确的科学问题不是“如何度量 LiDAR 与 Camera 的对称几何冲突”，也不是“如何直接用 Camera uncertainty 过滤伪标签”，而是：
 
-> 在强 fog 下，多模态检测发生非对称退化：fused pseudo labels 主要由 LiDAR 几何支撑，而 Camera/LSS 分支缺乏可靠自诊断能力。TTA 应如何在不改预训练模型架构的条件下，利用 LiDAR 点云的物理几何签名区分真实目标回波与雾气体散射误报？
+> 在强 fog 等恶劣天气下，多模态检测发生非对称退化：source-free BEVFusion TTA 如何在不依赖 fused score、Camera entropy 或对称 LiDAR-Camera agreement 的情况下，直接用 LiDAR 物理几何验证并复用低置信 fused pseudo labels？
 
 ---
 
@@ -50,17 +50,27 @@ full-val source-only benchmark 已得到以下关键事实：
 - 雾气误检来自 **volumetric scattering**，点云更可能是稀疏、悬浮、体内散布的离群簇；
 - 因此 `point_count`、`point_density`、`z_span`、`z_var` 比 Camera uncertainty 更适合作为强 fog 下的伪标签真伪验证信号。
 
-第一版可靠性形式改为：
+当前主线的可靠性形式改为 **Physical-over-Semantic recall mining**：在严重模态退化下，不再把 fused classification score 视为低分候选的唯一准入标准，而是用 LiDAR 物理几何对被低语义分数抑制的候选进行召回挖掘。
+
+为了避免方法被写成脆弱的 hard-threshold trick，第一版论文表述应采用连续的 **Geometric Confidence Calibration**：
 
 ```text
-W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
+G_density(i) = sigmoid(k * (rho_i - rho_th))
+G_z(i)       = sigmoid(m * (z_span_i - z_th))
+R_geo(i)     = G_density(i) * G_z(i)              # optional: * G_count(i)
+W_i          = max(Score_i, R_geo(i))
 ```
 
 - `Score_i`: fused detector score；
 - `N_pts`: pseudo box 内 LiDAR 点数；
 - `rho_pts = N_pts / (length * width * height)`: 点密度；
 - `z_span` / `z_var`: box 内点云垂直跨度与方差；
+- `R_geo(i)`: 基于 sigmoid 映射的软几何可靠性分数；
 - `H_depth(i)`: 仅作为后续 combined ablation 的辅助项，不作为当前主线。
+
+落地方式也随最新诊断调整：geometry verifier 不再依赖 `memory_ensemble_utils.save_pseudo_label_batch()` 之后的 ignored boxes，而应直接读取 raw `pred_dicts` 中 target-class low-score window，先做 LiDAR geometry verification，再 promote 或 reweight 为正伪标签。
+
+写作边界：可以把该机制称为“利用跨模态物理先验缓解 self-training confirmation bias”，但在 `fog s3` promoted-count、TP/FP proxy 与短 TTA 增益尚未闭环前，不应宣称低分 raw proposals 中“隐藏大量 TP”已经被证明。
 
 ### 小创新 1：Selective Adaptation Boundary
 
@@ -68,7 +78,9 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 
 ### 小创新 2：Class-aware Geometry-aware Denoising
 
-继续保留 `F1 + D1.3` 稳定基线：只对 `pedestrian=0.24` 与 `traffic_cone=0.34` 做 targeted denoising。下一步不是继续调 entropy 阈值，而是在这两个高噪类别上验证 LiDAR 几何支持是否能进一步降低 FP。
+继续保留 `F1 + D1.3` 稳定基线：只对 `pedestrian=0.24` 与 `traffic_cone=0.34` 做 targeted denoising。下一步不是继续调 entropy 或 geometry 门限，而是在 raw proposal 阶段对这两个高噪类别建立 class-aware reliability window：`pedestrian` 先验证 direct geometry promote，`traffic_cone` 先诊断低于 `NEG_THRESH` 的极低分候选是否有可用几何证据。
+
+该小创新在论文中应从 “Class-aware depth-aware denoising” 升级为 “Class-aware raw reliability window”：不同高噪类别使用不同的 raw score 探测窗口与几何校准强度，避免把全类别统一低阈值写成简单调参。
 
 ---
 
@@ -120,7 +132,8 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 - `pcdet/tta_methods/mos.py`
   - `save_pseudo_label_batch()` 已有伪标签过滤入口；
   - `_apply_depth_uncertainty_filter()` 保留为 `F1 + D1.3` 基线的一部分；
-  - 下一步应新增 geometry-aware pseudo-label filter / verifier，避免继续表达对称冲突假设。
+  - 已确认 `score_relax_verify` 依赖 ignored boxes 的接入点拿不到 relaxed candidates；
+  - 下一步应新增 `raw_geometry_direct_promote`：在调用 `memory_ensemble_utils.save_pseudo_label_batch()` 前，从 raw `pred_dicts` 中抽取 target-class low-score candidates，做 LiDAR geometry verification 后直接 promote/reweight。
 
 - `pcdet/ops/roiaware_pool3d/roiaware_pool3d_utils.py`
   - 可复用 `points_in_boxes_cpu/gpu` 或 roiaware pooling 提取 pseudo box 内点；
@@ -136,21 +149,21 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
    - 对比 TP/FP proxy 的 `N_pts`、`rho_pts`、`z_span`、`z_var` 分布；
    - 优先分析 `pedestrian` 与 `traffic_cone`。
 
-2. **Forward-only pseudo-label quality ablation**
+2. **Raw-proposal geometry verification**
    - `F1 + D1.3`
-   - `F1 + D1.3 + point-density only`
-   - `F1 + relaxed score + geometry verifier` (`rho_pts + z_span` first)
-   - `F1 + relaxed score + geometry verifier + entropy auxiliary`
+   - `F1 + raw_geometry_direct_promote` (`rho_pts + z_span` first)
+   - `F1 + raw_geometry_direct_reweight`
+   - `F1 + raw_geometry_direct_promote + entropy auxiliary`（只作为后续 ablation）
 
-   `fog_s3_geometry_probe` 显示当前 `D1.3` 高分框本身已经具有约 `95%` 量级的 2m TP proxy，因此第一版 verifier 不应主要做高分 hard filtering，而应验证低分 ignored boxes 的几何可信召回能力。
+   `fog_s3_geometry_probe` 显示当前 `D1.3` 高分框本身已经具有约 `95%` 量级的 2m TP proxy，因此第一版 verifier 不应主要做高分 hard filtering。最新 raw-window 诊断进一步显示：`pedestrian` 有少量 raw relaxed candidates，但它们没有进入 ignored boxes；`traffic_cone` 当前几乎全低于 `NEG_THRESH`。因此下一步应直接在 raw proposal 阶段验证低置信候选，而不是继续调 ignored-box geometry gate。
 
 3. **短 TTA 验证**
    - 只有当 pseudo-label precision / retained count / FP 控制改善后，才跑 `fog s3` TTA；
    - `fog s3` 成立后，再用 `fog s5` 做强退化确认。
 
-   初版 `score relaxation + geometry verifier` 的 `fog s3` 短 TTA 已显示 best 仍停在 `iter_0`，说明单纯进入自训练没有带来增益。下一步评价重点应从最终 NDS 暂时前移到训练期伪标签诊断：`ignored_relaxed`、`promoted`、`promote_rate`，以及 promoted boxes 的 `point_density / z_span` 分布。
+   初版 `score relaxation + geometry verifier` 的 `fog s3` 短 TTA 已显示 best 仍停在初始化附近，说明单纯进入自训练没有带来稳定增益。下一步评价重点应从最终 NDS 暂时前移到 raw proposal 诊断：`raw_relaxed_window`、`geometry_checked`、`direct_promoted`、`direct_reweighted`，以及 promoted boxes 的 `point_density / z_span` 与 TP/FP proxy 分布。
 
-   进一步的 LiDAR-only 诊断显示，即使关闭 `DEPTH_FILTER` 和 `CONFLICT_FILTER`，`geom_filter/*` 里的 `ignored_relaxed` 与 `promoted` 仍然为 0，说明几何 verifier 的问题不是门限太严，而是 raw pseudo labels 里 target-class 候选窗口本身为空。下一步应改做 raw proposal 的 score-window 诊断，确认 `pedestrian / traffic_cone` 在 `NEG_THRESH` 与 `SCORE_THRESH` 之间的数量。
+   最新 `fog_s3_raw_window_diag` 显示：`pedestrian_raw_total=419`、`raw_after_neg=16`、`raw_relaxed_window=11`、`raw_above_score=5`，但 `ignored_relaxed=0`、`promoted=0`；`traffic_cone_raw_total=12` 且全部低于 `NEG_THRESH`。因此当前主问题不是 geometry 门限太严，而是 relaxed candidates 在进入 `save_pseudo_label_batch()` 后没有被 geometry verifier 使用。下一步必须实现 direct raw-proposal promote/reweight。
 
 ---
 
@@ -173,8 +186,8 @@ W_i = Score_i * G_lidar(N_pts, rho_pts, z_span, z_var)
 - NDS / mAP；
 - `pedestrian` 与 `traffic_cone` 的 per-class AP；
 - pseudo-label precision / retained count；
-- geometry verifier 从低分 ignored boxes 中恢复的候选数、TP proxy、retained count；
-- 训练期 `geom_filter/*` 统计：低分候选数、恢复数、恢复率、恢复框几何均值；
+- raw proposal window 中可验证候选数、direct promoted/reweighted 数、TP proxy、retained count；
+- 训练期 `geom_filter/*` / `raw_geometry/*` 统计：`raw_relaxed_window`、`geometry_checked`、`direct_promoted`、`direct_reweighted`、promoted 框几何均值；
 - `pedestrian` / `traffic_cone` 的 `N_pts`、`rho_pts`、`z_span`、`z_var` 的 TP/FP 分布差异；
 - TTA 早期 iter 是否优于最终 epoch。
 
