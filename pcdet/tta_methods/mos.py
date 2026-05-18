@@ -109,21 +109,33 @@ class MOS(object):
         
         # Save raw pseudo labels（A8: 恢复与原版 MOS 一致的 memory-ensemble 语义）
         need_update = self._should_memory_update()
-        save_pseudo_label_batch(batch_dict, pred_dicts, need_update=need_update)
-        
+        save_pseudo_label_batch(
+            batch_dict, pred_dicts, need_update=need_update
+        )
+
         # 3. MOS Aggregation Logic (The Core)
         # Check if we have enough checkpoints to perform synergy
         start_ckpt = self.tta_cfg.MOS_SETTING.AGGREGATE_START_CKPT
         # 优先使用 train_st_utils 显式注入的当前 run ckpt 目录。
         # 仅在未注入时才回退到自动查找（兼容旧流程）。
-        ckpt_dir = self.run_ckpt_dir if self.run_ckpt_dir is not None else self._find_ckpt_dir()
+        ckpt_dir = (
+            self.run_ckpt_dir
+            if self.run_ckpt_dir is not None
+            else self._find_ckpt_dir()
+        )
 
         super_model = None
-        if self.tta_cfg.METHOD == 'mos' and start_ckpt <= self.total_samples_seen and ckpt_dir:
+        if (
+            self.tta_cfg.METHOD == 'mos'
+            and start_ckpt <= self.total_samples_seen
+            and ckpt_dir
+        ):
             model_path_list = self._collect_aggregation_ckpts(ckpt_dir)
 
             if len(model_path_list) >= 3:
-                super_model = self._perform_aggregation(model_path_list, batch_dict, pred_dicts)
+                super_model = self._perform_aggregation(
+                    model_path_list, batch_dict, pred_dicts
+                )
 
         # 4. Refine Pseudo Labels with Super Model (if exists)
         if super_model is not None:
@@ -131,7 +143,9 @@ class MOS(object):
             with torch.no_grad():
                 # Inference again with aggregated model
                 p_dicts, _ = super_model(batch_dict)
-                save_pseudo_label_batch(batch_dict, p_dicts, need_update=need_update)
+                save_pseudo_label_batch(
+                    batch_dict, p_dicts, need_update=need_update
+                )
             del super_model
 
         geometry_filter_stats = _get_geometry_filter_stats()
@@ -791,8 +805,17 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
     _reset_geometry_filter_stats()
     _update_raw_geometry_filter_stats(input_dict, pred_dicts)
 
+    geometry_cfg = cfg.SELF_TRAIN.get('GEOMETRY_FILTER', None)
+    geometry_mode = 'disabled'
+    if geometry_cfg is not None and geometry_cfg.get('ENABLED', False):
+        geometry_mode = str(geometry_cfg.get('MODE', 'score_relax_verify')).lower()
+
+    work_pred_dicts = pred_dicts
+    if geometry_mode in ['raw_direct_promote', 'raw_direct_reweight']:
+        work_pred_dicts = _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, geometry_mode)
+
     # 先生成当前 batch 的原始伪标签
-    NEW_PSEUDO_LABELS = memory_ensemble_utils.save_pseudo_label_batch(input_dict, NEW_PSEUDO_LABELS, pred_dicts)
+    NEW_PSEUDO_LABELS = memory_ensemble_utils.save_pseudo_label_batch(input_dict, NEW_PSEUDO_LABELS, work_pred_dicts)
 
     # D1: 基于深度估计不确定性的伪标签过滤（仅作用于高噪类）
     frame_ids = input_dict.get('frame_id', [])
@@ -802,7 +825,8 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             NEW_PSEUDO_LABELS[fid] = _apply_depth_uncertainty_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
             NEW_PSEUDO_LABELS[fid] = _apply_depth_entropy_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
             NEW_PSEUDO_LABELS[fid] = _apply_multimodal_conflict_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
-            NEW_PSEUDO_LABELS[fid] = _apply_geometry_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
+            if geometry_mode == 'score_relax_verify':
+                NEW_PSEUDO_LABELS[fid] = _apply_geometry_filter(NEW_PSEUDO_LABELS[fid], input_dict, b_idx)
 
     # A11: 前置质量过滤（按类别 Top-K 限流，重点约束长尾高噪类）
     frame_ids = input_dict.get('frame_id', [])
