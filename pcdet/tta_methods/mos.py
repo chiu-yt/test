@@ -1298,6 +1298,8 @@ def _new_geometry_filter_class_stats():
         'raw_relaxed_window': 0,
         'raw_above_score': 0,
         'raw_score_sum': 0.0,
+        'geometry_checked': 0,
+        'geo_score_sum': 0.0,
         'positive_before': 0,
         'ignored_relaxed': 0,
         'promoted': 0,
@@ -1369,6 +1371,7 @@ def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
     for cls_name, cls_stats in stats.items():
         raw_total = float(cls_stats.get('raw_total', 0))
         raw_relaxed_window = float(cls_stats.get('raw_relaxed_window', 0))
+        geometry_checked = float(cls_stats.get('geometry_checked', 0))
         positive_before = float(cls_stats.get('positive_before', 0))
         ignored_relaxed = float(cls_stats.get('ignored_relaxed', 0))
         promoted = float(cls_stats.get('promoted', 0))
@@ -1382,10 +1385,12 @@ def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
         tb_dict['%s_raw_above_score' % prefix] = float(cls_stats.get('raw_above_score', 0))
         tb_dict['%s_raw_relaxed_rate' % prefix] = raw_relaxed_window / max(raw_total, 1.0)
         tb_dict['%s_raw_score_mean' % prefix] = float(cls_stats.get('raw_score_sum', 0.0)) / max(raw_total, 1.0)
+        tb_dict['%s_geometry_checked' % prefix] = geometry_checked
+        tb_dict['%s_geo_score_mean' % prefix] = float(cls_stats.get('geo_score_sum', 0.0)) / max(geometry_checked, 1.0)
         tb_dict['%s_positive_before' % prefix] = positive_before
         tb_dict['%s_ignored_relaxed' % prefix] = ignored_relaxed
         tb_dict['%s_promoted' % prefix] = promoted
-        tb_dict['%s_promote_rate' % prefix] = promoted / max(ignored_relaxed, 1.0)
+        tb_dict['%s_promote_rate' % prefix] = promoted / max(max(ignored_relaxed, 1.0), geometry_checked if geometry_checked > 0 else 1.0)
 
         if promoted > 0:
             tb_dict['%s_promoted_score_mean' % prefix] = float(cls_stats.get('promoted_score_sum', 0.0)) / promoted
@@ -1397,10 +1402,172 @@ def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
             tb_dict['%s_promoted_z_span_mean' % prefix] = 0.0
 
         short_name = 'ped' if cls_name == 'pedestrian' else 'cone' if cls_name == 'traffic_cone' else cls_name[:4]
-        disp_parts.append('%s:%d/%d|raw%d' % (short_name, int(promoted), int(ignored_relaxed), int(raw_relaxed_window)))
+        disp_parts.append('%s:%d/%d|chk%d|raw%d' % (short_name, int(promoted), int(ignored_relaxed), int(geometry_checked), int(raw_relaxed_window)))
 
     tb_dict['geom_filter/total_promoted'] = float(total_promoted)
     disp_dict['geom_promote'] = ','.join(disp_parts)
+
+
+def _sigmoid_score(x, k, threshold):
+    x = float(x)
+    k = float(k)
+    threshold = float(threshold)
+    z = np.clip(-k * (x - threshold), -60.0, 60.0)
+    return float(1.0 / (1.0 + np.exp(z)))
+
+
+def _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, mode):
+    from pcdet.ops.roiaware_pool3d import roiaware_pool3d_utils
+
+    geometry_cfg = cfg.SELF_TRAIN.get('GEOMETRY_FILTER', None)
+    if geometry_cfg is None or not geometry_cfg.get('ENABLED', False):
+        return pred_dicts
+    if pred_dicts is None:
+        return pred_dicts
+
+    points = input_dict.get('points', None)
+    if points is None or points.shape[0] == 0:
+        return pred_dicts
+
+    target_names = set(geometry_cfg.get('TARGET_CLASSES', ['pedestrian', 'traffic_cone']))
+    target_ids = [i + 1 for i, name in enumerate(cfg.CLASS_NAMES) if name in target_names]
+    if len(target_ids) == 0:
+        return pred_dicts
+
+    score_thresh_arr = cfg.SELF_TRAIN.get('SCORE_THRESH', None)
+    neg_thresh_arr = cfg.SELF_TRAIN.get('NEG_THRESH', None)
+    relaxed_score_cfg = geometry_cfg.get('RELAXED_SCORE', {})
+    point_count_min_cfg = geometry_cfg.get('POINT_COUNT_MIN', {})
+    density_min_cfg = geometry_cfg.get('POINT_DENSITY_MIN', {})
+    z_span_min_cfg = geometry_cfg.get('Z_SPAN_MIN', {})
+    z_var_min_cfg = geometry_cfg.get('Z_VAR_MIN', {})
+    use_z_var = bool(geometry_cfg.get('USE_Z_VAR', False))
+    default_relaxed_score = float(geometry_cfg.get('DEFAULT_RELAXED_SCORE', 0.10))
+    default_point_count_min = int(geometry_cfg.get('DEFAULT_POINT_COUNT_MIN', 0))
+    default_density_min = float(geometry_cfg.get('DEFAULT_POINT_DENSITY_MIN', 30.0))
+    default_z_span_min = float(geometry_cfg.get('DEFAULT_Z_SPAN_MIN', 1.0))
+    default_z_var_min = float(geometry_cfg.get('DEFAULT_Z_VAR_MIN', 0.0))
+    density_k_cfg = geometry_cfg.get('DENSITY_SIGMOID_K', {})
+    z_span_k_cfg = geometry_cfg.get('Z_SPAN_SIGMOID_K', {})
+    count_k_cfg = geometry_cfg.get('POINT_COUNT_SIGMOID_K', {})
+    default_density_k = float(geometry_cfg.get('DEFAULT_DENSITY_SIGMOID_K', 0.2))
+    default_z_span_k = float(geometry_cfg.get('DEFAULT_Z_SPAN_SIGMOID_K', 4.0))
+    default_count_k = float(geometry_cfg.get('DEFAULT_POINT_COUNT_SIGMOID_K', 1.0))
+    promote_thresh_cfg = geometry_cfg.get('PROMOTE_THRESH', {})
+    default_promote_thresh = float(geometry_cfg.get('DEFAULT_PROMOTE_THRESH', 0.5))
+    promote_margin = float(geometry_cfg.get('PROMOTE_MARGIN', 1e-3))
+
+    new_pred_dicts = []
+    for b_idx, pred_dict in enumerate(pred_dicts):
+        if 'pred_boxes' not in pred_dict or 'pred_labels' not in pred_dict or 'pred_scores' not in pred_dict:
+            new_pred_dicts.append(pred_dict)
+            continue
+
+        pred_boxes = pred_dict['pred_boxes']
+        pred_labels = pred_dict['pred_labels']
+        pred_scores = pred_dict['pred_scores']
+        if pred_boxes is None or pred_labels is None or pred_scores is None or pred_boxes.shape[0] == 0:
+            new_pred_dicts.append(pred_dict)
+            continue
+
+        scores_np = pred_scores.detach().cpu().numpy().astype(np.float32)
+        labels_np = pred_labels.detach().cpu().numpy().astype(np.int64)
+        boxes_np = pred_boxes.detach().cpu().numpy().astype(np.float32)
+        finite_box_mask = np.isfinite(boxes_np[:, :7]).all(axis=1) & (boxes_np[:, 3:6] > 0).all(axis=1)
+
+        if isinstance(points, torch.Tensor):
+            batch_mask = points[:, 0].long() == b_idx
+            cur_points_cpu = points[batch_mask, 1:4].detach().cpu()
+        else:
+            pts_np = np.asarray(points)
+            batch_mask = pts_np[:, 0].astype(np.int64) == b_idx
+            cur_points_cpu = torch.as_tensor(pts_np[batch_mask, 1:4], dtype=torch.float32)
+
+        if cur_points_cpu.shape[0] == 0:
+            new_pred_dicts.append(pred_dict)
+            continue
+
+        new_scores = pred_scores.detach().clone()
+        checked_local = set()
+        for cls_id in target_ids:
+            cls_name = cfg.CLASS_NAMES[cls_id - 1]
+            cls_stats = _geometry_filter_class_stats(cls_name)
+            score_thresh = float(score_thresh_arr[cls_id - 1]) if score_thresh_arr is not None and 1 <= cls_id <= len(score_thresh_arr) else 0.25
+            neg_thresh = float(neg_thresh_arr[cls_id - 1]) if neg_thresh_arr is not None and 1 <= cls_id <= len(neg_thresh_arr) else 0.0
+            relaxed_score = float(_class_cfg_value(relaxed_score_cfg, cls_name, default_relaxed_score))
+            relaxed_lower = max(neg_thresh, relaxed_score)
+
+            candidate_inds = np.where((labels_np == cls_id) & finite_box_mask & (scores_np >= relaxed_lower) & (scores_np < score_thresh))[0]
+            if candidate_inds.size == 0:
+                continue
+
+            candidate_boxes_cpu = torch.as_tensor(boxes_np[candidate_inds, :7], dtype=torch.float32)
+            point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(cur_points_cpu, candidate_boxes_cpu)
+            if not isinstance(point_indices, torch.Tensor):
+                point_indices = torch.from_numpy(point_indices)
+
+            point_count_min = int(_class_cfg_value(point_count_min_cfg, cls_name, default_point_count_min))
+            density_min = float(_class_cfg_value(density_min_cfg, cls_name, default_density_min))
+            z_span_min = float(_class_cfg_value(z_span_min_cfg, cls_name, default_z_span_min))
+            z_var_min = float(_class_cfg_value(z_var_min_cfg, cls_name, default_z_var_min))
+            density_k = float(_class_cfg_value(density_k_cfg, cls_name, default_density_k))
+            z_span_k = float(_class_cfg_value(z_span_k_cfg, cls_name, default_z_span_k))
+            count_k = float(_class_cfg_value(count_k_cfg, cls_name, default_count_k))
+            promote_thresh = float(_class_cfg_value(promote_thresh_cfg, cls_name, default_promote_thresh))
+
+            for local_idx, global_idx in enumerate(candidate_inds.tolist()):
+                inside_mask = point_indices[local_idx] > 0
+                point_count = int(inside_mask.sum().item())
+                if point_count < point_count_min:
+                    continue
+
+                volume = float(np.prod(boxes_np[global_idx, 3:6]))
+                point_density = float(point_count / max(volume, 1e-6))
+                if point_density < density_min:
+                    continue
+
+                inside_z = cur_points_cpu[inside_mask, 2].float()
+                if inside_z.numel() == 0:
+                    continue
+                z_span = float((inside_z.max() - inside_z.min()).item())
+                if z_span < z_span_min:
+                    continue
+
+                z_var = float(inside_z.var(unbiased=False).item()) if inside_z.numel() > 0 else 0.0
+                if use_z_var and z_var < z_var_min:
+                    continue
+
+                density_geo = _sigmoid_score(point_density, density_k, density_min)
+                z_span_geo = _sigmoid_score(z_span, z_span_k, z_span_min)
+                count_geo = _sigmoid_score(point_count, count_k, max(point_count_min, 1))
+                geo_score = density_geo * z_span_geo
+                if point_count_min > 0:
+                    geo_score *= count_geo
+
+                cls_stats['geometry_checked'] += 1
+                cls_stats['geo_score_sum'] += geo_score
+                checked_local.add(int(global_idx))
+
+                if geo_score < promote_thresh:
+                    continue
+
+                new_score = max(float(scores_np[global_idx]), min(0.999, max(score_thresh + promote_margin, geo_score)))
+                if mode == 'raw_direct_reweight':
+                    new_score = max(float(scores_np[global_idx]), min(0.999, geo_score))
+                    if new_score < score_thresh:
+                        new_score = min(0.999, score_thresh + promote_margin)
+
+                new_scores[global_idx] = float(new_score)
+                cls_stats['promoted'] += 1
+                cls_stats['promoted_score_sum'] += float(new_score)
+                cls_stats['promoted_density_sum'] += point_density
+                cls_stats['promoted_z_span_sum'] += z_span
+
+        new_pred = dict(pred_dict)
+        new_pred['pred_scores'] = new_scores
+        new_pred_dicts.append(new_pred)
+
+    return new_pred_dicts
 
 
 def _apply_geometry_filter(gt_infos, batch_dict, batch_index):

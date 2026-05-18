@@ -304,6 +304,11 @@ SELF_TRAIN:
         DEFAULT_POINT_COUNT_MIN: 0
         DEFAULT_POINT_DENSITY_MIN: 30.0
         DEFAULT_Z_SPAN_MIN: 1.0
+        DEFAULT_PROMOTE_THRESH: 0.5
+        DEFAULT_DENSITY_SIGMOID_K: 0.2
+        DEFAULT_Z_SPAN_SIGMOID_K: 4.0
+        DEFAULT_POINT_COUNT_SIGMOID_K: 1.0
+        PROMOTE_MARGIN: 0.001
         USE_Z_VAR: False
         RELAXED_SCORE:
             pedestrian: 0.10
@@ -314,6 +319,9 @@ SELF_TRAIN:
         Z_SPAN_MIN:
             pedestrian: 1.0
             traffic_cone: 1.0
+        PROMOTE_THRESH:
+            pedestrian: 0.5
+            traffic_cone: 0.5
 
     CONFLICT_FILTER:
         ENABLED: True
