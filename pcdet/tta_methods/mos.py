@@ -1512,7 +1512,6 @@ def _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, mode):
             continue
 
         new_scores = pred_scores.detach().clone()
-        checked_local = set()
         for cls_id in target_ids:
             cls_name = cfg.CLASS_NAMES[cls_id - 1]
             cls_stats = _geometry_filter_class_stats(cls_name)
@@ -1542,35 +1541,29 @@ def _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, mode):
             for local_idx, global_idx in enumerate(candidate_inds.tolist()):
                 inside_mask = point_indices[local_idx] > 0
                 point_count = int(inside_mask.sum().item())
-                if point_count < point_count_min:
+                if point_count <= 0:
                     continue
 
                 volume = float(np.prod(boxes_np[global_idx, 3:6]))
                 point_density = float(point_count / max(volume, 1e-6))
-                if point_density < density_min:
-                    continue
 
                 inside_z = cur_points_cpu[inside_mask, 2].float()
                 if inside_z.numel() == 0:
                     continue
                 z_span = float((inside_z.max() - inside_z.min()).item())
-                if z_span < z_span_min:
-                    continue
 
                 z_var = float(inside_z.var(unbiased=False).item()) if inside_z.numel() > 0 else 0.0
-                if use_z_var and z_var < z_var_min:
-                    continue
 
                 density_geo = _sigmoid_score(point_density, density_k, density_min)
                 z_span_geo = _sigmoid_score(z_span, z_span_k, z_span_min)
                 count_geo = _sigmoid_score(point_count, count_k, max(point_count_min, 1))
-                geo_score = density_geo * z_span_geo
-                if point_count_min > 0:
-                    geo_score *= count_geo
+                geo_score = density_geo * z_span_geo * count_geo
+                if use_z_var:
+                    z_var_geo = _sigmoid_score(z_var, z_span_k, z_var_min)
+                    geo_score *= z_var_geo
 
                 cls_stats['geometry_checked'] += 1
                 cls_stats['geo_score_sum'] += geo_score
-                checked_local.add(int(global_idx))
 
                 if geo_score < promote_thresh:
                     continue
