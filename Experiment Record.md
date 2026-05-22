@@ -3,6 +3,9 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
+- `2026-05-22 03:50:16` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_geometry_direct_reweight_ped` `best_iter=100` `NDS=0.6582 mAP=0.6158 promoted=no`
+  - exp: `bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped`
+  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped/eval/eval_with_train`
 - `2026-05-20 00:05:21` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_geometry_direct_promote_ped_soft` `best_iter=40` `NDS=0.6586 mAP=0.6155 promoted=no`
   - exp: `bevfusion_mos/fog_s3_raw_geometry_direct_promote_ped_soft`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_geometry_direct_promote_ped_soft/eval/eval_with_train`
@@ -36,9 +39,6 @@
 - `2026-05-02 20:05:45` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6557 mAP=0.6131 promoted=no`
   - exp: `bevfusion_mos/default`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/fog_s3_depth_entropy`
-- `2026-05-02 19:39:12` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6735 mAP=0.6418 promoted=no`
-  - exp: `bevfusion_mos/default`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_depth_entropy`
 <!-- AUTO-EXPERIMENT-LOG:END -->
 
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
