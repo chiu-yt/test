@@ -13,6 +13,36 @@ except ImportError:
     pass
 
 
+def _build_lidar_aug_matrix_from_single_dict(data_dict):
+    lidar_aug_matrix = np.eye(4, dtype=np.float32)
+
+    flip_x = bool(data_dict.get('flip_x', False))
+    flip_y = bool(data_dict.get('flip_y', False))
+    if flip_x:
+        lidar_aug_matrix[:3, :3] = np.array(
+            [[1, 0, 0], [0, -1, 0], [0, 0, 1]], dtype=np.float32
+        ) @ lidar_aug_matrix[:3, :3]
+    if flip_y:
+        lidar_aug_matrix[:3, :3] = np.array(
+            [[-1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32
+        ) @ lidar_aug_matrix[:3, :3]
+
+    if 'noise_rot' in data_dict:
+        noise_rot = float(data_dict['noise_rot'])
+        rot_mat = common_utils.angle2matrix(torch.tensor(noise_rot)).cpu().numpy().astype(np.float32)
+        lidar_aug_matrix[:3, :3] = rot_mat @ lidar_aug_matrix[:3, :3]
+
+    if 'noise_scale' in data_dict:
+        noise_scale = float(data_dict['noise_scale'])
+        lidar_aug_matrix[:3, :3] *= noise_scale
+
+    if 'noise_translate' in data_dict:
+        noise_translate = np.asarray(data_dict['noise_translate'], dtype=np.float32).reshape(3)
+        lidar_aug_matrix[:3, 3] = noise_translate
+
+    return lidar_aug_matrix
+
+
 def _ensure_gt_boxes_10_np(gt_boxes: np.ndarray):
     """
     将 gt_boxes 统一成 10 列: [x,y,z,dx,dy,dz,yaw,vx,vy,cls]
@@ -66,6 +96,7 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
     new_img_process_infos_list = []
     new_ori_shape_list = []
     new_img_aug_matrix_list = []
+    new_lidar_aug_matrix_list = []
 
     point_cloud_range = getattr(dataset, 'point_cloud_range', None)
     if point_cloud_range is None and cfg.get('DATA_CONFIG', None) is not None:
@@ -149,6 +180,9 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
 
         # 4) 执行增强
         single_dict = augmentor.forward(data_dict=single_dict)
+        new_lidar_aug_matrix_list.append(
+            torch.from_numpy(_build_lidar_aug_matrix_from_single_dict(single_dict)).float().cuda()
+        )
 
         # 4.1) 读取增强后的 boxes
         aug_boxes = _ensure_gt_boxes_10_np(single_dict['gt_boxes'])
@@ -218,6 +252,10 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
     # ✅合并增强后的图像（如果存在）
     if len(new_images_list) > 0:
         target_batch['camera_imgs'] = torch.stack(new_images_list, dim=0)
+    if len(new_img_aug_matrix_list) > 0:
+        target_batch['img_aug_matrix'] = torch.stack(new_img_aug_matrix_list, dim=0)
+    if len(new_lidar_aug_matrix_list) > 0:
+        target_batch['lidar_aug_matrix'] = torch.stack(new_lidar_aug_matrix_list, dim=0)
 
     # 9) 重新生成 Voxel（如果 batch 里存在 voxel keys）
     if 'voxels' in target_batch:
