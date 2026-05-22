@@ -572,7 +572,7 @@ W_i          = max(Score_i, R_geo(i))
 - `pedestrian`
 - `traffic_cone`
 
-`pedestrian` 当前有少量 raw relaxed candidates，适合优先做 direct geometry promote；`traffic_cone` 当前几乎全部低于 `NEG_THRESH`，应先作为极低分候选窗口诊断对象，而不是继续指望 ignored-box geometry gate。
+`pedestrian` 当前有少量 raw relaxed candidates，但 direct promote 容易带来重复框与预测膨胀，因此更适合优先做 **candidate dedup + raw_direct_reweight**；`traffic_cone` 当前几乎全部低于 `NEG_THRESH`，应先作为极低分候选窗口诊断对象，而不是继续指望 ignored-box geometry gate。
 
 写作上应避免宣称“低分候选框中隐藏大量 TP”已经成立；更稳妥的说法是：raw-window 诊断发现 `pedestrian` 存在可被进一步验证的小规模低分候选，下一步需要用 TP/FP proxy 与短 TTA 验证其是否能转化为有效监督。
 
@@ -582,17 +582,18 @@ W_i          = max(Score_i, R_geo(i))
 
 1. 用 `fog s3 full-val` 作为主开发 benchmark；
 2. 以 `F1 + D1.3` 为 base；
-3. 先实现 direct raw-proposal geometry verification，而不是继续调 ignored-box gate；
-4. 先比较 raw low-score candidates 的 LiDAR 几何物理特征在 TP/FP proxy 上的可分性：
+3. 先实现 low-score candidate dedup / TTA-NMS + raw_direct_reweight，而不是继续调 ignored-box gate；
+4. 先比较 dedup 后 raw low-score candidates 的 LiDAR 几何物理特征在 TP/FP proxy 上的可分性：
    - `N_pts`: pseudo box 内点数；
    - `rho_pts = N_pts / (l * w * h)`: 点密度；
    - `z_span = z_max - z_min`: 垂直跨度；
    - `z_var`: 垂直方差；
 5. 再比较伪标签可靠性版本：
    - `F1 + D1.3`
-   - `F1 + raw_geometry_direct_promote`
+   - `F1 + raw candidate dedup only`
    - `F1 + raw_geometry_direct_reweight`
-   - `F1 + raw_geometry_direct_promote + entropy auxiliary`（只作后续 ablation）
+   - `F1 + raw_geometry_direct_promote`（只作对照 ablation）
+   - `F1 + raw_geometry_direct_reweight + entropy auxiliary`（只作后续 ablation）
 6. 若 raw promoted/reweighted candidates 的 precision / retained-count / 高噪类误报控制在 `fog s3` 上改善，再跑短 TTA；
 7. 若 `s3` 上成立，再在 `s5` 上做强退化确认。
 
@@ -615,7 +616,7 @@ W_i = max(Score_i, R_geo(i))
 
 `fog_s3_geom_relax_lidar_only_diag` 进一步确认：即使关闭 `DEPTH_FILTER` 和 `CONFLICT_FILTER`，`geom_filter/*` 里的 `ignored_relaxed` 与 `promoted` 仍然为 0。这说明当前几何 verifier 还没有拿到候选窗口，问题很可能出在 raw pseudo labels 的 score 分布而不是几何门限本身。下一步应补 raw proposal score-window 统计，确认 `pedestrian / traffic_cone` 在 `NEG_THRESH` 与 `SCORE_THRESH` 之间到底有没有足够候选。
 
-`fog_s3_raw_window_diag` 的最新结论进一步收敛了问题：`pedestrian` 有小规模 raw relaxed window（`raw_total=419`, `raw_after_neg=16`, `raw_relaxed_window=11`, `raw_above_score=5`），但 `ignored_relaxed=0`、`promoted=0`；`traffic_cone` 只有 `raw_total=12` 且全部低于 `NEG_THRESH`。因此下一步不要继续调 `point_density_min / z_span_min`，而要把 verifier 前移到 raw proposal 阶段，先验证 `pedestrian` direct promote/reweight 是否能产生高质量新增监督。
+`fog_s3_raw_window_diag` 的最新结论进一步收敛了问题：`pedestrian` 有小规模 raw relaxed window（`raw_total=419`, `raw_after_neg=16`, `raw_relaxed_window=11`, `raw_above_score=5`），但 `ignored_relaxed=0`、`promoted=0`；`traffic_cone` 只有 `raw_total=12` 且全部低于 `NEG_THRESH`。后续 `raw_direct_promote` soft 试验虽已打通 `geometry_checked -> promoted` 链路，但会造成 `Pred[pedestrian]` 大幅膨胀且总体指标基本不涨。因此下一步不要继续 aggressive promote，而要把主方法改成 **candidate dedup + raw_direct_reweight**：先压缩低分重复框，再做保守的几何置信度校准。
 
 文献表述边界：LSS / BEVDepth / BEVFusion 已有离散 depth posterior，单目 3D 检测与 TTA 中也有 uncertainty / entropy weighting 先例；但目前不要声称 BEVFusion 标准做法已经用 depth-bin entropy 过滤 3D pseudo labels。更稳妥的表述是：从已有 depth posterior 中派生一个 zero-cost uncertainty score。
 

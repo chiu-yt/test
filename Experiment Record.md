@@ -91,6 +91,8 @@ W_i          = max(Score_i, R_geo(i))
 
 当前确定要解决的一句话问题：**恶劣天气非对称模态退化下，source-free BEVFusion TTA 如何不依赖 fused score、Camera entropy 或对称 LiDAR-Camera agreement，而是直接用 LiDAR 物理几何验证并复用低置信 fused pseudo labels？**
 
+`fog_s3_raw_geometry_direct_promote_ped_soft` 已证明新链路本身可运行：`pedestrian_raw_relaxed_window` 非零步数为 `1436/1505`，`geometry_checked` 非零步数 `1436/1505`，`promoted` 非零步数 `878/1505`，单步最多可 promote `18` 个候选。这说明 raw low-score candidates 已经真正进入 geometry scoring 与 direct promote 路径。但该版本的副作用也很明确：`Pred[pedestrian]` 在评估时膨胀到 `52万~55万` 量级，best `iter_40` 仅 `NDS=0.6586`, `mAP=0.6155`，与 baseline 基本持平，`pedestrian` mean AP 也未显著提升。因此下一步主线应从 aggressive `raw_direct_promote` 切换到 **candidate dedup + raw_direct_reweight**：先对低分候选做更强的 TTA-NMS / dedup，再用保守的 `R_geo` 校准候选分数，优先抑制重复框与低质 promote 引起的 precision collapse。
+
 ## 1. 研究背景与问题定义
 
 本阶段工作的出发点，是参考 MOS 在**单激光雷达**场景下表现较好的 test-time adaptation（TTA）/ self-training 思路，尝试将其迁移到 **OpenPCDet + BEVFusion** 的**多模态夜间场景**中，希望在 night domain 上继续提升检测性能，重点指标为 **NDS** 和 **mAP**。

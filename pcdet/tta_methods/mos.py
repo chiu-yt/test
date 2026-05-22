@@ -12,6 +12,7 @@ from scipy.optimize import linear_sum_assignment
 
 from pcdet.config import cfg
 from pcdet.models import load_data_to_gpu, build_network
+from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils, box_utils
 from pcdet.utils.tta_utils import TTA_augmentation
 from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
@@ -1322,6 +1323,7 @@ def _new_geometry_filter_class_stats():
         'raw_relaxed_window': 0,
         'raw_above_score': 0,
         'raw_score_sum': 0.0,
+        'raw_nms_kept': 0,
         'geometry_checked': 0,
         'geo_score_sum': 0.0,
         'positive_before': 0,
@@ -1409,6 +1411,7 @@ def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
         tb_dict['%s_raw_above_score' % prefix] = float(cls_stats.get('raw_above_score', 0))
         tb_dict['%s_raw_relaxed_rate' % prefix] = raw_relaxed_window / max(raw_total, 1.0)
         tb_dict['%s_raw_score_mean' % prefix] = float(cls_stats.get('raw_score_sum', 0.0)) / max(raw_total, 1.0)
+        tb_dict['%s_raw_nms_kept' % prefix] = float(cls_stats.get('raw_nms_kept', 0))
         tb_dict['%s_geometry_checked' % prefix] = geometry_checked
         tb_dict['%s_geo_score_mean' % prefix] = float(cls_stats.get('geo_score_sum', 0.0)) / max(geometry_checked, 1.0)
         tb_dict['%s_positive_before' % prefix] = positive_before
@@ -1426,7 +1429,7 @@ def _add_geometry_filter_stats_to_logs(stats, tb_dict, disp_dict):
             tb_dict['%s_promoted_z_span_mean' % prefix] = 0.0
 
         short_name = 'ped' if cls_name == 'pedestrian' else 'cone' if cls_name == 'traffic_cone' else cls_name[:4]
-        disp_parts.append('%s:%d/%d|chk%d|raw%d' % (short_name, int(promoted), int(ignored_relaxed), int(geometry_checked), int(raw_relaxed_window)))
+        disp_parts.append('%s:%d/%d|nms%d|chk%d|raw%d' % (short_name, int(promoted), int(ignored_relaxed), int(cls_stats.get('raw_nms_kept', 0)), int(geometry_checked), int(raw_relaxed_window)))
 
     tb_dict['geom_filter/total_promoted'] = float(total_promoted)
     disp_dict['geom_promote'] = ','.join(disp_parts)
@@ -1438,6 +1441,31 @@ def _sigmoid_score(x, k, threshold):
     threshold = float(threshold)
     z = np.clip(-k * (x - threshold), -60.0, 60.0)
     return float(1.0 / (1.0 + np.exp(z)))
+
+
+def _greedy_bev_nms_cpu(boxes, scores, thresh, post_maxsize=0):
+    if boxes is None or scores is None or len(boxes) == 0:
+        return np.zeros((0,), dtype=np.int64)
+
+    boxes_cpu = torch.as_tensor(boxes[:, :7], dtype=torch.float32)
+    scores_cpu = torch.as_tensor(scores, dtype=torch.float32)
+    order = torch.argsort(scores_cpu, descending=True).cpu().numpy().astype(np.int64)
+    keep = []
+
+    while order.size > 0:
+        cur = int(order[0])
+        keep.append(cur)
+        if post_maxsize > 0 and len(keep) >= int(post_maxsize):
+            break
+        if order.size == 1:
+            break
+
+        rest = order[1:]
+        ious = iou3d_nms_utils.boxes_bev_iou_cpu(boxes_cpu[cur:cur + 1], boxes_cpu[rest])
+        ious = np.asarray(ious).reshape(-1)
+        order = rest[ious <= float(thresh)]
+
+    return np.asarray(keep, dtype=np.int64)
 
 
 def _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, mode):
@@ -1477,9 +1505,17 @@ def _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, mode):
     default_density_k = float(geometry_cfg.get('DEFAULT_DENSITY_SIGMOID_K', 0.2))
     default_z_span_k = float(geometry_cfg.get('DEFAULT_Z_SPAN_SIGMOID_K', 4.0))
     default_count_k = float(geometry_cfg.get('DEFAULT_POINT_COUNT_SIGMOID_K', 1.0))
+    raw_nms_thresh_cfg = geometry_cfg.get('RAW_NMS_THRESH', {})
+    raw_nms_post_max_cfg = geometry_cfg.get('RAW_NMS_POST_MAXSIZE', {})
+    default_raw_nms_thresh = float(geometry_cfg.get('DEFAULT_RAW_NMS_THRESH', 0.15))
+    default_raw_nms_post_max = int(geometry_cfg.get('DEFAULT_RAW_NMS_POST_MAXSIZE', 32))
     promote_thresh_cfg = geometry_cfg.get('PROMOTE_THRESH', {})
     default_promote_thresh = float(geometry_cfg.get('DEFAULT_PROMOTE_THRESH', 0.5))
     promote_margin = float(geometry_cfg.get('PROMOTE_MARGIN', 1e-3))
+    reweight_gain_cfg = geometry_cfg.get('REWEIGHT_GAIN', {})
+    default_reweight_gain = float(geometry_cfg.get('DEFAULT_REWEIGHT_GAIN', 0.15))
+    reweight_cap_cfg = geometry_cfg.get('REWEIGHT_MAX_SCORE', {})
+    default_reweight_cap = float(geometry_cfg.get('DEFAULT_REWEIGHT_MAX_SCORE', 0.36))
 
     new_pred_dicts = []
     for b_idx, pred_dict in enumerate(pred_dicts):
@@ -1537,6 +1573,21 @@ def _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, mode):
             z_span_k = float(_class_cfg_value(z_span_k_cfg, cls_name, default_z_span_k))
             count_k = float(_class_cfg_value(count_k_cfg, cls_name, default_count_k))
             promote_thresh = float(_class_cfg_value(promote_thresh_cfg, cls_name, default_promote_thresh))
+            raw_nms_thresh = float(_class_cfg_value(raw_nms_thresh_cfg, cls_name, default_raw_nms_thresh))
+            raw_nms_post_max = int(_class_cfg_value(raw_nms_post_max_cfg, cls_name, default_raw_nms_post_max))
+            reweight_gain = float(_class_cfg_value(reweight_gain_cfg, cls_name, default_reweight_gain))
+            reweight_cap = float(_class_cfg_value(reweight_cap_cfg, cls_name, default_reweight_cap))
+
+            if candidate_inds.size > 1 and raw_nms_thresh > 0:
+                keep_local = _greedy_bev_nms_cpu(
+                    boxes_np[candidate_inds, :7],
+                    scores_np[candidate_inds],
+                    thresh=raw_nms_thresh,
+                    post_maxsize=raw_nms_post_max
+                )
+                candidate_inds = candidate_inds[keep_local]
+
+            cls_stats['raw_nms_kept'] += int(candidate_inds.size)
 
             for local_idx, global_idx in enumerate(candidate_inds.tolist()):
                 inside_mask = point_indices[local_idx] > 0
@@ -1570,9 +1621,9 @@ def _apply_raw_geometry_to_pred_dicts(input_dict, pred_dicts, mode):
 
                 new_score = max(float(scores_np[global_idx]), min(0.999, max(score_thresh + promote_margin, geo_score)))
                 if mode == 'raw_direct_reweight':
-                    new_score = max(float(scores_np[global_idx]), min(0.999, geo_score))
-                    if new_score < score_thresh:
-                        new_score = min(0.999, score_thresh + promote_margin)
+                    score_span = max(reweight_cap - score_thresh - promote_margin, 0.0)
+                    calibrated = score_thresh + promote_margin + score_span * reweight_gain * geo_score
+                    new_score = max(float(scores_np[global_idx]), min(reweight_cap, calibrated))
 
                 new_scores[global_idx] = float(new_score)
                 cls_stats['promoted'] += 1

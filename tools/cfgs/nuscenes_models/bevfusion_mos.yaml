@@ -308,7 +308,11 @@ SELF_TRAIN:
         DEFAULT_DENSITY_SIGMOID_K: 0.2
         DEFAULT_Z_SPAN_SIGMOID_K: 4.0
         DEFAULT_POINT_COUNT_SIGMOID_K: 1.0
+        DEFAULT_RAW_NMS_THRESH: 0.15
+        DEFAULT_RAW_NMS_POST_MAXSIZE: 32
         PROMOTE_MARGIN: 0.001
+        DEFAULT_REWEIGHT_GAIN: 0.15
+        DEFAULT_REWEIGHT_MAX_SCORE: 0.36
         USE_Z_VAR: False
         RELAXED_SCORE:
             pedestrian: 0.10
@@ -322,6 +326,18 @@ SELF_TRAIN:
         PROMOTE_THRESH:
             pedestrian: 0.5
             traffic_cone: 0.5
+        RAW_NMS_THRESH:
+            pedestrian: 0.15
+            traffic_cone: 0.15
+        RAW_NMS_POST_MAXSIZE:
+            pedestrian: 32
+            traffic_cone: 32
+        REWEIGHT_GAIN:
+            pedestrian: 0.15
+            traffic_cone: 0.15
+        REWEIGHT_MAX_SCORE:
+            pedestrian: 0.36
+            traffic_cone: 0.32
 
     CONFLICT_FILTER:
         ENABLED: True

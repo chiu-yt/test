@@ -68,7 +68,7 @@ W_i          = max(Score_i, R_geo(i))
 - `R_geo(i)`: 基于 sigmoid 映射的软几何可靠性分数；
 - `H_depth(i)`: 仅作为后续 combined ablation 的辅助项，不作为当前主线。
 
-落地方式也随最新诊断调整：geometry verifier 不再依赖 `memory_ensemble_utils.save_pseudo_label_batch()` 之后的 ignored boxes，而应直接读取 raw `pred_dicts` 中 target-class low-score window，先做 LiDAR geometry verification，再 promote 或 reweight 为正伪标签。
+落地方式也随最新诊断调整：geometry verifier 不再依赖 `memory_ensemble_utils.save_pseudo_label_batch()` 之后的 ignored boxes，而应直接读取 raw `pred_dicts` 中 target-class low-score window，先做低分候选去重（candidate dedup / TTA-NMS），再做 LiDAR geometry verification，最后以保守的 reweight 为主、promote 为辅地写入伪标签。
 
 写作边界：可以把该机制称为“利用跨模态物理先验缓解 self-training confirmation bias”，但在 `fog s3` promoted-count、TP/FP proxy 与短 TTA 增益尚未闭环前，不应宣称低分 raw proposals 中“隐藏大量 TP”已经被证明。
 
@@ -151,9 +151,10 @@ W_i          = max(Score_i, R_geo(i))
 
 2. **Raw-proposal geometry verification**
    - `F1 + D1.3`
-   - `F1 + raw_geometry_direct_promote` (`rho_pts + z_span` first)
+   - `F1 + raw candidate dedup only`
    - `F1 + raw_geometry_direct_reweight`
-   - `F1 + raw_geometry_direct_promote + entropy auxiliary`（只作为后续 ablation）
+   - `F1 + raw_geometry_direct_promote`（只作为对照 ablation）
+   - `F1 + raw_geometry_direct_reweight + entropy auxiliary`（只作为后续 ablation）
 
    `fog_s3_geometry_probe` 显示当前 `D1.3` 高分框本身已经具有约 `95%` 量级的 2m TP proxy，因此第一版 verifier 不应主要做高分 hard filtering。最新 raw-window 诊断进一步显示：`pedestrian` 有少量 raw relaxed candidates，但它们没有进入 ignored boxes；`traffic_cone` 当前几乎全低于 `NEG_THRESH`。因此下一步应直接在 raw proposal 阶段验证低置信候选，而不是继续调 ignored-box geometry gate。
 
@@ -163,7 +164,7 @@ W_i          = max(Score_i, R_geo(i))
 
    初版 `score relaxation + geometry verifier` 的 `fog s3` 短 TTA 已显示 best 仍停在初始化附近，说明单纯进入自训练没有带来稳定增益。下一步评价重点应从最终 NDS 暂时前移到 raw proposal 诊断：`raw_relaxed_window`、`geometry_checked`、`direct_promoted`、`direct_reweighted`，以及 promoted boxes 的 `point_density / z_span` 与 TP/FP proxy 分布。
 
-   最新 `fog_s3_raw_window_diag` 显示：`pedestrian_raw_total=419`、`raw_after_neg=16`、`raw_relaxed_window=11`、`raw_above_score=5`，但 `ignored_relaxed=0`、`promoted=0`；`traffic_cone_raw_total=12` 且全部低于 `NEG_THRESH`。因此当前主问题不是 geometry 门限太严，而是 relaxed candidates 在进入 `save_pseudo_label_batch()` 后没有被 geometry verifier 使用。下一步必须实现 direct raw-proposal promote/reweight。
+   最新 `fog_s3_raw_window_diag` 显示：`pedestrian_raw_total=419`、`raw_after_neg=16`、`raw_relaxed_window=11`、`raw_above_score=5`，但 `ignored_relaxed=0`、`promoted=0`；`traffic_cone_raw_total=12` 且全部低于 `NEG_THRESH`。后续 `raw_direct_promote` soft 试验进一步表明，虽然 `geometry_checked` 和 `promoted` 已经非零，但 `Pred[pedestrian]` 会异常膨胀到 50 万量级，总体 `NDS/mAP` 仍基本持平。因此下一步的主方法不应是继续 aggressive promote，而应转向 **candidate dedup + raw_direct_reweight**：先压缩低分重复框，再做软几何置信度校准。
 
 ---
 
@@ -186,8 +187,8 @@ W_i          = max(Score_i, R_geo(i))
 - NDS / mAP；
 - `pedestrian` 与 `traffic_cone` 的 per-class AP；
 - pseudo-label precision / retained count；
-- raw proposal window 中可验证候选数、direct promoted/reweighted 数、TP proxy、retained count；
-- 训练期 `geom_filter/*` / `raw_geometry/*` 统计：`raw_relaxed_window`、`geometry_checked`、`direct_promoted`、`direct_reweighted`、promoted 框几何均值；
+- raw proposal window 中可验证候选数、dedup 后候选数、direct promoted/reweighted 数、TP proxy、retained count；
+- 训练期 `geom_filter/*` / `raw_geometry/*` 统计：`raw_relaxed_window`、`raw_nms_kept`、`geometry_checked`、`direct_promoted`、`direct_reweighted`、reweighted/promoted 框几何均值；
 - `pedestrian` / `traffic_cone` 的 `N_pts`、`rho_pts`、`z_span`、`z_var` 的 TP/FP 分布差异；
 - TTA 早期 iter 是否优于最终 epoch。
 
