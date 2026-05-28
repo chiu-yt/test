@@ -1,4 +1,4 @@
-# OpenPCDet / BEVFusion Night TTA 实验记录
+# OpenPCDet / BEVFusion Adaptation 实验记录
 
 ## 0. Auto-maintained Experiment Ledger
 
@@ -40,6 +40,25 @@
   - exp: `bevfusion_mos/default`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/clean_object_depth_entropy`
 <!-- AUTO-EXPERIMENT-LOG:END -->
+
+## 0.0 2026-05 路线重构结论
+
+当前项目已完成一次明确的研究路线调整：
+
+1. **第一篇论文主线** 从“恶劣天气多模态在线 TTA”切换到“单车多模态 BEVFusion 在正常场景部署偏移下的轻量自适应”；
+2. **恶劣天气线** 不删除，保留为第二阶段或第二篇工作的研究资产；
+3. **协同 / V2X / S2C-UDA 直接继承** 不作为当前默认主线，因为当前仓库并无对应代码与数据链路。
+
+做出这一步的原因是：
+
+- adverse-weather 线虽然积累了大量高价值分析，但主结果仍停留在极小增益和未闭环机制上；
+- 当前仓库真正成熟的多模态主链是 `nuScenes + BEVFusion`，更适合做单车、多模态、轻量 adaptation；
+- 为了毕业优先，需要选择工程延续性最强、发表风险最低的路线。
+
+因此，后续阅读本记录时应把它理解为两部分资产：
+
+- 一部分是**当前已归档的 adverse-weather 研究历史**；
+- 另一部分是可直接迁移到新主线的工程与分析资产，如 `fix_nan`、`freeze`、best-iter 自动评估、depth/geometry 诊断工具等。
 
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 

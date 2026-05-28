@@ -1,15 +1,126 @@
 # 硕士研究课题开题与执行报告
 
-**课题名称：** 基于 LiDAR 几何物理验证的多模态 3D 目标检测测试时自适应研究  
-**(LiDAR Geometry Verification for Multimodal 3D Object Detection Test-Time Adaptation)**
+**课题名称：** 面向正常场景部署偏移的 BEVFusion 多模态 3D 检测自适应研究  
+**(Multimodal BEVFusion Adaptation under Normal-Scene Deployment Shift)**
 
 **研究周期：** 3-6 个月  
 **目标受众：** 硕士学位论文 / SCI 二区期刊为主，兼顾向 IROS/ICRA/T-IV 级别工作靠拢  
-**核心约束：** 严格聚焦 source-free / off-the-shelf BEVFusion 的 Test-Time Adaptation，不重新预训练检测器，不引入需要 source training 的新网络结构。
+**核心约束：** 严格聚焦 source-free / off-the-shelf BEVFusion 的轻量自适应，不重新预训练检测器，不引入需要新代码库或 source-side 重新训练的大型结构。
 
 ---
 
-## 一、研究背景与最新问题修正
+## 0. 2026-05 路线重构结论
+
+当前项目已完成一次明确的研究路线重构：
+
+- **第一篇论文主线** 从“恶劣天气多模态在线 TTA”切换到“**正常场景下的单车多模态 BEVFusion 轻量自适应**”；
+- **恶劣天气研究** 不删除，保留为第二阶段或第二篇工作的研究资产；
+- **协同/V2X/S2C-UDA 继承路线** 在没有现成代码和数据链路的前提下，不作为当前毕业主线。
+
+这一步的原因不是原方向完全错误，而是：
+
+1. `fog/night` 线已经系统暴露出高噪伪标签、极小增益、机制未闭环等高风险信号；
+2. 当前仓库真正成熟的多模态主链是 `nuScenes + BEVFusion`，并不包含协同/V2X 的现成工程脚手架；
+3. 对毕业优先的目标来说，更合理的策略是复用现有 BEVFusion 工程资产，在正常场景部署偏移下做一个**轻量、可解释、可复现**的 adaptation 方法。
+
+因此，本文档的作用分为两部分：
+
+- 前半部分定义新的**主论文路线**；
+- 后半部分保留既有 adverse-weather 研究，作为后续研究与论文扩展的档案。
+
+---
+
+## 一、当前第一篇论文主线
+
+### 1.1 问题定义
+
+新的核心科学问题是：
+
+> 在不改动 BEVFusion 主干架构、也不依赖外部协同/V2X 代码库的前提下，如何利用多模态内部的几何与置信度结构，在**正常场景部署偏移**下实现稳定、轻量、source-free 的单车多模态 3D 检测自适应？
+
+这里的 `deployment shift` 有意写得比 `cross-dataset` 更宽，但第一阶段实现上应优先复用当前 `nuScenes + BEVFusion` 管线，只引入轻量 target-side shift，而不是立刻跳到需要重建全套数据链的跨仓库方案。
+
+### 1.2 推荐方法方向
+
+当前优先级如下：
+
+1. **Cross-Modal Reliability Calibration**
+   - 不改 BEVFusion 主体；
+   - 基于 `LiDAR BEV`、`Image BEV`、`depth posterior / entropy`、单模态/融合预测之间的一致性与差异，构造 fused pseudo-label 的可靠性校准；
+   - 方法重点放在 **reweight / calibration**，而不是激进 promote。
+
+2. **Parameter-Efficient Fusion Adapter**
+   - 冻结 `image_backbone`、`backbone_3d`、`neck`；
+   - 在 `FUSER` 后或 `BACKBONE_2D` 前插入轻量 adapter；
+   - 仅更新极少参数，规避 full-model TTA 的不稳定性。
+
+3. **Backprop-Free Checkpoint / Model Merging**
+   - 借鉴 `MOS` / `CodeMerge` 类思路；
+   - 利用 BEV 融合特征或预测签名对历史 checkpoint 进行轻量组合；
+   - 仅在第一、二条路线难以快速形成结果时考虑作为替代线。
+
+### 1.3 当前不作为主线的方案
+
+以下方向不适合当前第一篇论文主线：
+
+1. **协同 / V2X / S2C-UDA 直接继承**
+   - 当前仓库没有对应数据集、消息传递、协同评测与训练脚手架；
+   - 没有师兄代码时，真实成本等价于新项目。
+
+2. **重型 Teacher-Student UDA 大系统**
+   - 内存、调参、训练稳定性成本高；
+   - 容易再次陷入“工程很大、结果很弱”的风险。
+
+3. **恶劣天气在线 TTA 作为第一篇主线**
+   - 当前已证明其研究风险显著高于毕业收益；
+   - 应转为第二阶段研究资产。
+
+### 1.4 两周起跑原则
+
+第一阶段只做下面三件事：
+
+1. 在当前 `nuScenes + BEVFusion` 管线上定义一个**正常场景部署偏移**设置；
+2. 先跑 `source-only`、`vanilla TTA/self-training`、`fix_nan + freeze baseline`；
+3. 在此基础上落地一个**轻量可靠性校准**方法，并用最小 ablation 判定是否值得继续。
+
+止损原则：如果轻量主线在短周期内仍然只能产生噪声级增益，则优先切到 `PEFT adapter`，而不是再跳回复杂 adverse-weather 或 V2X 方向。
+
+---
+
+## 二、现有工程资产如何复用
+
+新的主线并不是推倒重来。以下资产应直接保留：
+
+1. `F1`：冻结 `image_backbone + neck` 的策略；
+2. `fix_nan`：非有限值与损失保护逻辑；
+3. `best-iter` 自动评估链路；
+4. `depth_conf_map / depth_entropy_map` 一类多模态辅助诊断；
+5. 伪标签统计与 per-class 分析工具；
+6. 当前 `mos.py` 中已经验证过的训练循环、日志与 target-side augmentation 接口。
+
+这些内容是新主线的工程基础，不应因为题目切换而丢弃。
+
+---
+
+## 三、归档的 adverse-weather 研究价值
+
+恶劣天气研究不再是第一篇论文主线，但应明确保留为后续工作资产：
+
+1. 它系统揭示了 **asymmetric modality collapse** 这一强问题；
+2. 它提供了 `conflict probe`、`depth entropy probe`、`geometry probe` 等分析工具；
+3. 它已经沉淀出一条可继续深入的 hypothesis：
+
+> 在强退化条件下，fused pseudo labels 的主要问题不是一般性 domain shift，而是多模态非对称塌缩下的 LiDAR-dominated yet noisy pseudo-label reuse。
+
+这部分内容适合作为：
+
+- 第二篇论文主线；
+- 毕业论文的高难扩展章节；
+- 或后续向更强 benchmark 推进时的 future work。
+
+---
+
+## 四、归档：恶劣天气研究背景与问题修正
 
 本项目最初围绕“跨模态冲突感知”展开：在 fog 条件下，BEVFusion dual-fusion 结果明显弱于单模态结果，因此推测 LiDAR 与 Camera 的几何冲突导致 fused pseudo labels 不可靠。
 

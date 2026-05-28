@@ -1,7 +1,8 @@
+import io
 import numpy as np
 import math
 import copy
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 from ...utils import common_utils
 from ...utils import box_utils
 
@@ -74,6 +75,72 @@ def apply_image_fog(images, severity=1):
     if images is None:
         return images
     return [apply_image_fog_single(img, severity=severity) for img in images]
+
+
+def apply_image_style_single(image, severity=1):
+    """
+    Mild normal-scene camera style shift for deployment mismatch simulation.
+    Applies a combination of brightness / contrast / color temperature drift,
+    light blur, and JPEG-style compression.
+    """
+    severity = int(np.clip(severity, 1, 5))
+    if not isinstance(image, Image.Image):
+        image = Image.fromarray(np.asarray(image))
+
+    img = image.convert('RGB')
+    brightness = [0.92, 0.88, 1.10, 1.14, 0.84][severity - 1]
+    contrast = [0.95, 0.90, 1.08, 0.86, 1.12][severity - 1]
+    color = [0.96, 0.92, 1.08, 0.88, 1.12][severity - 1]
+    blur_radius = [0.0, 0.4, 0.8, 1.0, 1.2][severity - 1]
+    jpeg_quality = [90, 80, 70, 60, 50][severity - 1]
+
+    img = ImageEnhance.Brightness(img).enhance(brightness)
+    img = ImageEnhance.Contrast(img).enhance(contrast)
+    img = ImageEnhance.Color(img).enhance(color)
+
+    if blur_radius > 0:
+        img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=jpeg_quality)
+    buf.seek(0)
+    out = Image.open(buf).convert('RGB')
+    out.load()
+    buf.close()
+    return out
+
+
+def apply_image_style(images, severity=1):
+    if images is None:
+        return images
+    return [apply_image_style_single(img, severity=severity) for img in images]
+
+
+def apply_lidar_sparsity(points, severity=1, rng=None):
+    """
+    Mild normal-scene LiDAR sparsity shift for deployment mismatch simulation.
+    Keeps geometry intact while reducing density and slightly perturbing intensity.
+    """
+    if points is None or len(points) == 0:
+        return points
+
+    severity = int(np.clip(severity, 1, 5))
+    rng = np.random if rng is None else rng
+    keep_ratio = [0.90, 0.80, 0.70, 0.60, 0.50][severity - 1]
+
+    pts = points.copy()
+    keep_mask = rng.rand(pts.shape[0]) < keep_ratio
+    min_keep = min(max(64, int(points.shape[0] * 0.2)), points.shape[0])
+    if keep_mask.sum() < min_keep:
+        keep_mask[:] = False
+        keep_idx = rng.choice(points.shape[0], size=min_keep, replace=False)
+        keep_mask[keep_idx] = True
+
+    pts = pts[keep_mask]
+    if pts.shape[1] > 3:
+        intensity_scale = [0.98, 0.95, 0.92, 0.88, 0.85][severity - 1]
+        pts[:, 3] = pts[:, 3] * intensity_scale
+    return pts.astype(points.dtype, copy=False)
 
 
 def random_flip_along_x(gt_boxes, points, return_flip=False, enable=None):

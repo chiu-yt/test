@@ -31,6 +31,15 @@ CORRUPTION:
     IMAGE_FOG:
         ENABLED: False
         SEVERITY: 1
+    LIDAR_SPARSITY:
+        ENABLED: False
+        SEVERITY: 1
+    IMAGE_STYLE:
+        ENABLED: False
+        SEVERITY: 1
+    IMAGE_GEOMETRY:
+        ENABLED: False
+        SEVERITY: 1
 
 DATA_AUGMENTOR:
     DISABLE_AUG_LIST: ['placeholder']

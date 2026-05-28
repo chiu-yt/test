@@ -38,15 +38,28 @@ class NuScenesDataset(DatasetTemplate):
             self.corruption_apply_in = set([str(x).lower() for x in apply_in])
             self.lidar_fog_cfg = self.corruption_cfg.get('LIDAR_FOG', {})
             self.image_fog_cfg = self.corruption_cfg.get('IMAGE_FOG', {})
+            self.lidar_sparsity_cfg = self.corruption_cfg.get('LIDAR_SPARSITY', {})
+            self.image_style_cfg = self.corruption_cfg.get('IMAGE_STYLE', {})
+            self.image_geometry_cfg = self.corruption_cfg.get('IMAGE_GEOMETRY', {})
             if self.logger is not None:
                 self.logger.info(
-                    'NuScenes corruption enabled | apply_in=%s | lidar_fog=%s | image_fog=%s'
-                    % (list(self.corruption_apply_in), bool(self.lidar_fog_cfg.get('ENABLED', False)), bool(self.image_fog_cfg.get('ENABLED', False)))
+                    'NuScenes corruption enabled | apply_in=%s | lidar_fog=%s | image_fog=%s | lidar_sparsity=%s | image_style=%s | image_geometry=%s'
+                    % (
+                        list(self.corruption_apply_in),
+                        bool(self.lidar_fog_cfg.get('ENABLED', False)),
+                        bool(self.image_fog_cfg.get('ENABLED', False)),
+                        bool(self.lidar_sparsity_cfg.get('ENABLED', False)),
+                        bool(self.image_style_cfg.get('ENABLED', False)),
+                        bool(self.image_geometry_cfg.get('ENABLED', False))
+                    )
                 )
         else:
             self.corruption_apply_in = set()
             self.lidar_fog_cfg = {}
             self.image_fog_cfg = {}
+            self.lidar_sparsity_cfg = {}
+            self.image_style_cfg = {}
+            self.image_geometry_cfg = {}
 
         self.include_nuscenes_data(self.mode)
         if self.training and self.dataset_cfg.get('BALANCED_RESAMPLING', False):
@@ -144,6 +157,10 @@ class NuScenesDataset(DatasetTemplate):
         imgs = input_dict["camera_imgs"]
         img_process_infos = []
         crop_images = []
+        use_geometry_shift = self._use_corruption() and self.image_geometry_cfg.get('ENABLED', False)
+        geo_severity = int(self.image_geometry_cfg.get('SEVERITY', 1)) if use_geometry_shift else 1
+        resize_mul_table = [1.00, 1.03, 0.97, 1.06, 0.94]
+        crop_offset_ratio_table = [0.00, 0.04, -0.04, 0.06, -0.06]
         for img in imgs:
             if self.training == True:
                 fH, fW = self.camera_image_config.FINAL_DIM
@@ -158,10 +175,15 @@ class NuScenesDataset(DatasetTemplate):
                 fH, fW = self.camera_image_config.FINAL_DIM
                 resize_lim = self.camera_image_config.RESIZE_LIM_TEST
                 resize = np.mean(resize_lim)
+                if use_geometry_shift:
+                    resize *= resize_mul_table[geo_severity - 1]
                 resize_dims = (int(W * resize), int(H * resize))
                 newW, newH = resize_dims
                 crop_h = newH - fH
                 crop_w = int(max(0, newW - fW) / 2)
+                if use_geometry_shift and newW > fW:
+                    crop_w += int((newW - fW) * crop_offset_ratio_table[geo_severity - 1])
+                    crop_w = int(np.clip(crop_w, 0, max(0, newW - fW)))
                 crop = (crop_w, crop_h, crop_w + fW, crop_h + fH)
             
             # reisze and crop image
@@ -226,6 +248,9 @@ class NuScenesDataset(DatasetTemplate):
         if self._use_corruption() and self.image_fog_cfg.get('ENABLED', False):
             severity = int(self.image_fog_cfg.get('SEVERITY', 1))
             images = augmentor_utils.apply_image_fog(images, severity=severity)
+        if self._use_corruption() and self.image_style_cfg.get('ENABLED', False):
+            severity = int(self.image_style_cfg.get('SEVERITY', 1))
+            images = augmentor_utils.apply_image_style(images, severity=severity)
         
         input_dict["camera_imgs"] = images
         input_dict["ori_shape"] = images[0].size
@@ -256,6 +281,9 @@ class NuScenesDataset(DatasetTemplate):
         if self._use_corruption() and self.lidar_fog_cfg.get('ENABLED', False):
             severity = int(self.lidar_fog_cfg.get('SEVERITY', 1))
             points = augmentor_utils.apply_lidar_fog(points, severity=severity)
+        if self._use_corruption() and self.lidar_sparsity_cfg.get('ENABLED', False):
+            severity = int(self.lidar_sparsity_cfg.get('SEVERITY', 1))
+            points = augmentor_utils.apply_lidar_sparsity(points, severity=severity)
 
         input_dict = {
             'points': points,

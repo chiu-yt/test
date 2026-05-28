@@ -1,8 +1,18 @@
 # BEVFusion 恶劣条件 TTA 论文与实验路线图
 
+> **状态说明（2026-05 更新）**
+>
+> 本文档已从“当前主线计划”降级为“**第二阶段 / 后续论文的保留研究路线图**”。
+> 当前第一篇论文主线已切换到 `docs/guidelines_of_approaches/bevfusion_multimodal_normal_shift_plan.md` 中定义的 **单车多模态正常场景 BEVFusion 轻量自适应**。
+>
+> 保留本文档的目的有三点：
+> 1. 归档已完成的 adverse-weather 实验、负结果与分析资产；
+> 2. 为后续继续研究 fog/night/asymmetric collapse 提供直接上下文；
+> 3. 避免未来重新进入该方向时重复走已经证伪的路线。
+
 ## 1. 研究定位
 
-当前工作的更优主线，不建议继续收缩为“夜间部署专用 TTA”，而应提升为：
+当前工作的 archived 研究主线是：
 
 > **面向恶劣条件 domain shift 的多模态 3D 目标检测 Test-Time Adaptation（TTA）**
 
@@ -76,6 +86,8 @@
 推荐主标题方向：
 
 > **Test-Time Adaptation for Multimodal 3D Object Detection under Adverse Weather and Illumination Shifts**
+
+但需要明确：这不再是当前毕业优先的第一篇主线，而是保留给后续研究的高难方向。
 
 更具体的论文叙事应围绕以下三点展开：
 

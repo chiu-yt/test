@@ -1,0 +1,24 @@
+_BASE_CONFIG_: cfgs/nuscenes_models/bevfusion_mos.yaml
+
+DATA_CONFIG:
+    CORRUPTION:
+        ENABLED: True
+        APPLY_IN: ['train', 'test']
+        LIDAR_FOG:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_FOG:
+            ENABLED: False
+            SEVERITY: 1
+        LIDAR_SPARSITY:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_STYLE:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_GEOMETRY:
+            ENABLED: False
+            SEVERITY: 1
+
+TTA:
+    ENABLED: True
