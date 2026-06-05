@@ -1,5 +1,74 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_lidar_sparsity_s1||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-06-05T17:34:50",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/default",
+    "extra_tag": "default",
+    "eval_tag": "normal_shift_b0_lidar_sparsity_s1",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default",
+    "eval_output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_lidar_sparsity_s1",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.6722212856533935,
+      "mAP": 0.639498221771374
+    },
+    "metrics_file": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_lidar_sparsity_s1/final_result/data/metrics_summary.json"
+  },
+  {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_resize_s1||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-06-05T17:21:27",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/default",
+    "extra_tag": "default",
+    "eval_tag": "normal_shift_b0_camera_resize_s1",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default",
+    "eval_output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_resize_s1",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.673571382293384,
+      "mAP": 0.6420051031078364
+    },
+    "metrics_file": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_resize_s1/final_result/data/metrics_summary.json"
+  },
+  {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s1||checkpoint_epoch_10.pth||single_eval",
+    "updated_at": "2026-06-05T16:41:25",
+    "source": "tools/test.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/default",
+    "extra_tag": "default",
+    "eval_tag": "normal_shift_b0_camera_style_s1",
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "single_eval",
+    "eval_all": false,
+    "output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default",
+    "eval_output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s1",
+    "ckpt_type": "epoch",
+    "ckpt_id": 10,
+    "ckpt_label": "checkpoint_epoch_10.pth",
+    "metrics": {
+      "NDS": 0.6716539239116149,
+      "mAP": 0.6394476134525575
+    },
+    "metrics_file": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s1/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped_nms_bs2_noagg/eval/eval_with_train||checkpoint_iter_20||best_summary",
     "updated_at": "2026-05-24T23:02:32",
     "source": "tools/train.py",
