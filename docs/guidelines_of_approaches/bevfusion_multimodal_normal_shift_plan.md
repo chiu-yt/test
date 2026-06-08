@@ -49,7 +49,18 @@
 
 新的核心问题是：
 
-> 在 BEVFusion 主体保持不变的前提下，如何利用 LiDAR 与 Camera 在正常场景下的内部几何与置信度结构，对 fused pseudo labels 或 fused BEV features 进行轻量校准，从而实现稳定的 source-free adaptation？
+> 在自动驾驶多模态 3D 目标检测中，正常部署场景下的无标签目标分布偏移会引发 **deployment-induced multimodal mismatch**：相机分支到 BEV 空间的等效投影关系发生偏移，使 Camera BEV 与 LiDAR BEV 特征在共享 BEV 网格中的空间对应关系退化，进而使融合模块在源域学习到的跨模态特征关联与置信度估计难以泛化到目标部署场景，最终降低 3D 检测精度。
+
+本文第一阶段不把问题写成传统 `cross-dataset UDA`，而是聚焦：
+
+> 在 BEVFusion 主体保持不变、source data 不可访问的前提下，如何对目标部署场景中的跨模态 BEV 对应关系与融合置信度进行轻量校准，从而实现稳定的 source-free / test-time adaptation？
+
+术语边界：
+
+- `source domain`：原始 `nuScenes + BEVFusion` 训练分布与源模型；
+- `target deployment domain`：同一管线下带正常部署扰动的无标签测试流；
+- `Camera-to-BEV effective projection relationship shift`：由图像风格、resize/crop、principal-point-like offset、预处理差异或深度投影可靠性变化引起的等效投影偏移；
+- 不直接宣称真实物理标定外参发生变化，除非后续显式加入 calibration 参数扰动实验。
 
 这里的重点不是“彻底重建融合结构”，而是：
 
@@ -107,7 +118,7 @@
 - 轻度相机尺度/裁剪偏移；
 - 点云稀疏化或 beam dropout；
 - 轻度模态不对齐；
-- 轻度 calibration-like perturbation。
+- 轻度 Camera-to-BEV 等效投影扰动。
 
 原因：
 
@@ -129,12 +140,14 @@
 2. **Camera geometry / resize shift**
    - image resize range perturbation
    - crop / principal-point-like offset
-   - 目的：模拟不同安装、不同预处理与轻度标定误差
+   - 目的：模拟不同安装、不同预处理与 Camera-to-BEV 等效投影偏移
 
 3. **LiDAR sparsity / modality mismatch shift**
    - random beam dropout
    - point thinning / sweep sparsification
    - 目的：模拟不同雷达线数、采样密度与同步差异
+
+这三类 shift 的论文解释应保持单因子可归因：`IMAGE_STYLE` 主要考察视觉表观分布偏移，`IMAGE_GEOMETRY` 主要考察 Camera-to-BEV 等效投影关系偏移，`LIDAR_SPARSITY` 主要考察点云密度变化导致的跨模态可靠性不均衡。第一轮不叠加多种 shift，避免把问题重新变成不可解释的混合退化。
 
 ### 5.1.2 第一阶段不建议直接做的 shift
 
@@ -157,18 +170,24 @@
 至少准备：
 
 1. `source-only BEVFusion`
-2. `vanilla self-training / TTA`
-3. `fix_nan + freeze baseline`
+2. `BN / TENT-style lightweight TTA`（若能稳定接入，作为最轻量通用 TTA baseline）
+3. `vanilla self-training / TTA`
+4. `fix_nan + freeze baseline`
+5. `EMA teacher / CoTTA-style` 或 `ST3D-style pseudo-label filtering`（至少二选一作为代表性强 baseline）
+
+公平比较原则：所有方法应使用同一个 `BEVFusion` detector、同一个 source checkpoint、同一个 target shift、相同 batch size / adaptation steps / target stream。论文主表比较的是 adaptation gain，不是 detector SOTA。
 
 ### 5.2.1 推荐 baseline 命名
 
 为了后续实验记录和论文表格统一，建议从第一轮开始固定命名：
 
 1. `B0`: source-only
-2. `B1`: source-free vanilla adaptation
-3. `B2`: `fix_nan + F1 freeze`
-4. `M1`: `B2 + cross-modal reliability calibration`
-5. `M2`: `B2 + fusion adapter`
+2. `B1`: source-free vanilla adaptation / MOS-style self-training
+3. `B1a`: BN / TENT-style lightweight TTA（可选但推荐）
+4. `B1b`: EMA teacher 或 ST3D-style pseudo-label filtering（可选强 baseline）
+5. `B2`: `fix_nan + F1 freeze`
+6. `M1`: `B2 + cross-modal reliability calibration`
+7. `M2`: `B2 + fusion adapter`
 
 ### 5.3 第一阶段目标
 
@@ -184,6 +203,8 @@
 2. 最优点不是单个偶然 iter，而是一个短区间内可重复；
 3. 伪标签统计或可靠性统计没有出现明显爆炸；
 4. 方法解释可以清楚落到“跨模态可靠性校准”而不是纯阈值技巧。
+
+若第一轮 `severity=1` 信号成立，下一步至少扩展到 `severity=2/3` 或补一个真实子域小实验；若 `severity=1` 本身退化很弱，则不应急于写方法增益，而应先提高 target shift 的可观测性。
 
 ## 6. 两周起跑计划
 
@@ -247,7 +268,7 @@
 ## 9. 近期具体执行清单
 
 1. 为 `nuScenes + BEVFusion` 定义三种 normal-scene shift 配置：`camera_style`、`camera_resize`、`lidar_sparsity`。
-2. 在现有 `bevfusion_mos.yaml` 基础上复制出正常场景 adaptation 配置，而不是继续复用 adverse-weather 命名。
+2. 第一轮命令直接使用 `bevfusion_mos.yaml` 并通过 `--set DATA_CONFIG.CORRUPTION.*` 覆盖 normal-shift 开关；暂不使用二级继承的 `bevfusion_mos_normal_shift.yaml`。
 3. 跑 `B0/B1/B2` 三条 baseline，记录统一实验表。
 4. 先在 `mos.py` 或紧邻模块落地 `M1: cross-modal reliability calibration`。
 5. 若 `M1` 信号弱，再进入 `M2: fusion adapter`，不直接跳大型 teacher-student。
@@ -260,11 +281,12 @@
 
 ```bash
 python test.py \
-  --cfg_file cfgs/nuscenes_models/bevfusion_mos_normal_shift.yaml \
+  --cfg_file cfgs/nuscenes_models/bevfusion_mos.yaml \
   --ckpt ../output/nuscenes_models/bevfusion/multimodal_baseline_4gpu/ckpt/checkpoint_epoch_10.pth \
   --batch_size 4 \
   --eval_tag normal_shift_b0_camera_style_s1 \
   --set \
+  MODEL.IMAGE_BACKBONE.INIT_CFG.checkpoint /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth \
   DATA_CONFIG.CORRUPTION.ENABLED True \
   DATA_CONFIG.CORRUPTION.APPLY_IN "['test']" \
   DATA_CONFIG.CORRUPTION.IMAGE_STYLE.ENABLED True \
@@ -278,11 +300,12 @@ python test.py \
 
 ```bash
 python test.py \
-  --cfg_file cfgs/nuscenes_models/bevfusion_mos_normal_shift.yaml \
+  --cfg_file cfgs/nuscenes_models/bevfusion_mos.yaml \
   --ckpt ../output/nuscenes_models/bevfusion/multimodal_baseline_4gpu/ckpt/checkpoint_epoch_10.pth \
   --batch_size 4 \
   --eval_tag normal_shift_b0_camera_resize_s1 \
   --set \
+  MODEL.IMAGE_BACKBONE.INIT_CFG.checkpoint /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth \
   DATA_CONFIG.CORRUPTION.ENABLED True \
   DATA_CONFIG.CORRUPTION.APPLY_IN "['test']" \
   DATA_CONFIG.CORRUPTION.IMAGE_STYLE.ENABLED False \
@@ -296,11 +319,12 @@ python test.py \
 
 ```bash
 python test.py \
-  --cfg_file cfgs/nuscenes_models/bevfusion_mos_normal_shift.yaml \
+  --cfg_file cfgs/nuscenes_models/bevfusion_mos.yaml \
   --ckpt ../output/nuscenes_models/bevfusion/multimodal_baseline_4gpu/ckpt/checkpoint_epoch_10.pth \
   --batch_size 4 \
   --eval_tag normal_shift_b0_lidar_sparsity_s1 \
   --set \
+  MODEL.IMAGE_BACKBONE.INIT_CFG.checkpoint /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth \
   DATA_CONFIG.CORRUPTION.ENABLED True \
   DATA_CONFIG.CORRUPTION.APPLY_IN "['test']" \
   DATA_CONFIG.CORRUPTION.IMAGE_STYLE.ENABLED False \
@@ -316,12 +340,13 @@ python test.py \
 
 ```bash
 python train.py \
-  --cfg_file cfgs/nuscenes_models/bevfusion_mos_normal_shift.yaml \
+  --cfg_file cfgs/nuscenes_models/bevfusion_mos.yaml \
   --ckpt ../output/nuscenes_models/bevfusion/multimodal_baseline_4gpu/ckpt/checkpoint_epoch_10.pth \
   --batch_size 2 \
   --epochs 1 \
   --extra_tag normal_shift_b2_camera_style_s1 \
   --set \
+  MODEL.IMAGE_BACKBONE.INIT_CFG.checkpoint /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth \
   DATA_CONFIG.CORRUPTION.ENABLED True \
   DATA_CONFIG.CORRUPTION.APPLY_IN "['train','test']" \
   DATA_CONFIG.CORRUPTION.IMAGE_STYLE.ENABLED True \

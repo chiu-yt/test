@@ -65,9 +65,11 @@
 核心逻辑：
 
 1. 多模态 3D 检测在真实部署中会遭遇轻度但持续的分布偏移；
-2. 现有多模态 adaptation 要么过重、要么不稳定、要么依赖复杂训练系统；
-3. 对 BEVFusion 这类大模型来说，轻量、source-free、可解释的方法更有实际价值；
-4. 提出 cross-modal reliability calibration。
+2. 这种偏移不一定表现为传统 cross-dataset UDA，而是同一部署管线内的 **deployment-induced multimodal mismatch**；
+3. 对 BEVFusion 而言，关键退化机制是 Camera-to-BEV 等效投影关系偏移，使 Camera BEV 与 LiDAR BEV 在共享 BEV 网格中的空间对应关系和融合置信度变得不可靠；
+4. 现有多模态 adaptation 要么过重、要么不稳定、要么依赖复杂训练系统；
+5. 对 BEVFusion 这类大模型来说，轻量、source-free、可解释的方法更有实际价值；
+6. 提出 cross-modal reliability calibration。
 
 ### 5.2 Related Work
 
@@ -83,17 +85,19 @@
 建议结构：
 
 1. BEVFusion baseline and deployment shift setting
-2. cross-modal reliability formulation
-3. calibration / reweight pipeline
-4. selective adaptation boundary
-5. optional lightweight adapter extension
+2. Camera-to-BEV effective projection shift and BEV correspondence degradation
+3. cross-modal reliability formulation
+4. calibration / reweight pipeline
+5. selective adaptation boundary
+6. optional lightweight adapter extension
 
 ### 5.4 Experiments
 
 主表：
 
-1. 三种 normal-scene shift 上的总体结果
-2. 与 `source-only` / `vanilla` / `freeze baseline` / `method` 对比
+1. 三种 normal-scene shift 上的总体结果：`IMAGE_STYLE`、`IMAGE_GEOMETRY`、`LIDAR_SPARSITY`
+2. 与 `source-only` / `BN-TENT style` / `vanilla self-training` / `EMA or ST3D-style` / `freeze baseline` / `method` 对比
+3. 若 `severity=1` 信号成立，扩展到 `severity=2/3`；若信号太弱，先增强 shift 可观测性而不是直接宣称方法有效
 
 ablation：
 
@@ -115,8 +119,10 @@ ablation：
 ### 第一阶段 baseline
 
 1. `B0`: source-only
-2. `B1`: vanilla adaptation
-3. `B2`: `fix_nan + F1 freeze`
+2. `B1`: vanilla adaptation / MOS-style self-training
+3. `B1a`: BN / TENT-style lightweight TTA
+4. `B1b`: EMA teacher 或 ST3D-style pseudo-label filtering
+5. `B2`: `fix_nan + F1 freeze`
 
 ### 第一阶段主方法
 
@@ -136,7 +142,8 @@ ablation：
 1. 至少 2 个 normal-scene shift 上优于 `B0/B1/B2`；
 2. 增益不是单个偶然 iter；
 3. 统计量没有爆炸；
-4. 方法解释可以清楚写成“跨模态可靠性校准”。
+4. 方法解释可以清楚写成“跨模态可靠性校准”；
+5. 所有 adaptation baseline 使用同一个 BEVFusion checkpoint、同一个 target stream 与相同 adaptation budget，避免被审稿人质疑 detector 或训练预算不公平。
 
 ## 8. 与恶劣天气研究的关系
 

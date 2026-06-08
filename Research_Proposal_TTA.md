@@ -36,9 +36,15 @@
 
 新的核心科学问题是：
 
-> 在不改动 BEVFusion 主干架构、也不依赖外部协同/V2X 代码库的前提下，如何利用多模态内部的几何与置信度结构，在**正常场景部署偏移**下实现稳定、轻量、source-free 的单车多模态 3D 检测自适应？
+> 在自动驾驶多模态 3D 目标检测中，源模型部署到无标签目标场景后会遭遇正常但持续的目标分布偏移。这类偏移会引发 Camera-to-BEV 等效投影关系变化，使 Camera BEV 与 LiDAR BEV 特征在共享 BEV 空间中的对应关系退化，进而使融合模块在源域学习到的跨模态特征关联与置信度估计难以泛化到目标部署场景，最终降低 3D 检测精度。
+
+因此，新的核心科学问题是：
+
+> 在不改动 BEVFusion 主干架构、也不依赖外部协同/V2X 代码库的前提下，如何在 source data 不可访问的目标部署测试流中，对跨模态 BEV 对应关系与融合置信度进行轻量校准，从而实现稳定、source-free 的单车多模态 3D 检测 test-time adaptation？
 
 这里的 `deployment shift` 有意写得比 `cross-dataset` 更宽，但第一阶段实现上应优先复用当前 `nuScenes + BEVFusion` 管线，只引入轻量 target-side shift，而不是立刻跳到需要重建全套数据链的跨仓库方案。
+
+术语上，本文第一阶段应写成 **normal-scene deployment shift / source-free test-time adaptation**，而不是不加限定地写成传统 `UDA`。其中 `IMAGE_GEOMETRY` 更准确地解释为由 resize/crop、principal-point-like offset 或预处理差异引起的 **Camera-to-BEV effective projection relationship shift**；除非后续显式扰动内外参，否则不应宣称真实物理标定关系发生变化。
 
 ### 1.2 推荐方法方向
 
@@ -80,8 +86,10 @@
 第一阶段只做下面三件事：
 
 1. 在当前 `nuScenes + BEVFusion` 管线上定义一个**正常场景部署偏移**设置；
-2. 先跑 `source-only`、`vanilla TTA/self-training`、`fix_nan + freeze baseline`；
+2. 先跑 `source-only`、`BN/TENT-style lightweight TTA`、`vanilla TTA/self-training`、`EMA or ST3D-style pseudo-label baseline`、`fix_nan + freeze baseline`；
 3. 在此基础上落地一个**轻量可靠性校准**方法，并用最小 ablation 判定是否值得继续。
+
+公平比较原则：所有 adaptation baseline 都应固定在同一个 BEVFusion detector、同一个 source checkpoint、同一个 target shift、相同 batch size / adaptation steps / target stream 下比较。论文主结论比较的是 adaptation gain，不与最新 detector 做绝对 SOTA 排名。
 
 止损原则：如果轻量主线在短周期内仍然只能产生噪声级增益，则优先切到 `PEFT adapter`，而不是再跳回复杂 adverse-weather 或 V2X 方向。
 

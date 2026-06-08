@@ -60,6 +60,20 @@
 - 一部分是**当前已归档的 adverse-weather 研究历史**；
 - 另一部分是可直接迁移到新主线的工程与分析资产，如 `fix_nan`、`freeze`、best-iter 自动评估、depth/geometry 诊断工具等。
 
+### 0.0.1 2026-06 正常部署 TTA 问题定义
+
+当前第一篇论文继续走 `nuScenes + BEVFusion` 的单车多模态 TTA 路线，但术语上应明确区分于传统跨数据集 UDA：
+
+> 本研究关注 **normal-scene deployment shift 下的 source-free / test-time adaptation**。源模型来自原始 `nuScenes + BEVFusion` 训练分布，目标域是同一部署管线下带无标签正常扰动的测试流，而不是 KITTI / Waymo 等跨数据集迁移。
+
+当前核心机制假设写为：
+
+> 目标部署分布偏移会引发 Camera-to-BEV 等效投影关系变化，使 Camera BEV 与 LiDAR BEV 特征在共享 BEV 空间中的对应关系退化，进而使融合模块在源域学习到的跨模态特征关联与置信度估计难以泛化到目标部署场景。
+
+第一批 `B0` source-only 实验已经在服务器完成三组：`normal_shift_b0_camera_style_s1`、`normal_shift_b0_camera_resize_s1`、`normal_shift_b0_lidar_sparsity_s1`。结果数值尚未回传到本地，因此当前文档只记录实验状态，不提前写结论。
+
+后续比较应固定同一个 BEVFusion source checkpoint、同一个 target shift 与相同 adaptation budget。主表比较的是 `source-only`、`BN/TENT-style`、`vanilla/MOS-style`、`EMA or ST3D-style`、`fix_nan + freeze` 与 `Ours` 的 adaptation gain，而不是与最新 detector 做绝对 SOTA 排名。
+
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 
 `fog_s3_conflict_probe` 已完成，用 `B_L / B_C / B_Fused` 做 forward-only 分析，结论是：
