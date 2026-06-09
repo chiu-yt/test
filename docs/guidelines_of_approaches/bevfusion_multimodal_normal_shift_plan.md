@@ -361,3 +361,59 @@ python train.py \
 - `B1`：关闭 `fix_nan + freeze` 之外的额外主线策略，仅保留 vanilla adaptation；
 - `B2`：保留当前 `fix_nan + F1 freeze` 稳定化设置；
 - 第一轮只建议用 `severity=1`，先确认方法在轻度 deployment shift 下有正信号。
+
+## 11. 2026-06 临界测试：B2 lidar_sparsity
+
+`s5/s7` B0 结果显示 `LIDAR_SPARSITY` 是当前最强 target shift，而继续提高 severity 已无明显增益。因此下一轮不再调 severity，直接跑 `B2 = fix_nan + F1 freeze + no aggregation`。
+
+以下命令默认在 `tools/` 目录执行。训练带反向传播，建议先用总 `batch_size=2`（两卡时每卡约 1）保证稳定；若完全稳定再提高 batch size。
+
+### 11.1 B2: lidar_sparsity_s5
+
+```bash
+bash scripts/torch_train.sh 2 \
+  --cfg_file cfgs/nuscenes_models/bevfusion_mos.yaml \
+  --ckpt ../output/nuscenes_models/bevfusion/multimodal_baseline_4gpu/ckpt/checkpoint_epoch_10.pth \
+  --batch_size 2 \
+  --epochs 1 \
+  --extra_tag normal_shift_b2_lidar_sparsity_s5_noagg \
+  --set \
+  MODEL.IMAGE_BACKBONE.INIT_CFG.checkpoint /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth \
+  DATA_CONFIG.CORRUPTION.ENABLED True \
+  DATA_CONFIG.CORRUPTION.APPLY_IN "['train','test']" \
+  DATA_CONFIG.CORRUPTION.IMAGE_STYLE.ENABLED False \
+  DATA_CONFIG.CORRUPTION.IMAGE_GEOMETRY.ENABLED False \
+  DATA_CONFIG.CORRUPTION.LIDAR_SPARSITY.ENABLED True \
+  DATA_CONFIG.CORRUPTION.LIDAR_SPARSITY.SEVERITY 5 \
+  DATA_CONFIG.CORRUPTION.LIDAR_FOG.ENABLED False \
+  DATA_CONFIG.CORRUPTION.IMAGE_FOG.ENABLED False \
+  TTA.ENABLED True \
+  TTA.FREEZE.ENABLED True \
+  TTA.MOS_SETTING.AGGREGATE_START_CKPT 999999
+```
+
+### 11.2 B2: lidar_sparsity_s7
+
+```bash
+bash scripts/torch_train.sh 2 \
+  --cfg_file cfgs/nuscenes_models/bevfusion_mos.yaml \
+  --ckpt ../output/nuscenes_models/bevfusion/multimodal_baseline_4gpu/ckpt/checkpoint_epoch_10.pth \
+  --batch_size 2 \
+  --epochs 1 \
+  --extra_tag normal_shift_b2_lidar_sparsity_s7_noagg \
+  --set \
+  MODEL.IMAGE_BACKBONE.INIT_CFG.checkpoint /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth \
+  DATA_CONFIG.CORRUPTION.ENABLED True \
+  DATA_CONFIG.CORRUPTION.APPLY_IN "['train','test']" \
+  DATA_CONFIG.CORRUPTION.IMAGE_STYLE.ENABLED False \
+  DATA_CONFIG.CORRUPTION.IMAGE_GEOMETRY.ENABLED False \
+  DATA_CONFIG.CORRUPTION.LIDAR_SPARSITY.ENABLED True \
+  DATA_CONFIG.CORRUPTION.LIDAR_SPARSITY.SEVERITY 7 \
+  DATA_CONFIG.CORRUPTION.LIDAR_FOG.ENABLED False \
+  DATA_CONFIG.CORRUPTION.IMAGE_FOG.ENABLED False \
+  TTA.ENABLED True \
+  TTA.FREEZE.ENABLED True \
+  TTA.MOS_SETTING.AGGREGATE_START_CKPT 999999
+```
+
+判定标准：若 `B2` 相对对应 B0 不能稳定恢复至少 `0.8 mAP` 或 `0.5 NDS`，则停止扩展当前 MOS-style BEVFusion TTA，转向 `CodeMerge-style head merging`、`small fusion adapter` 或更换多模态基线。

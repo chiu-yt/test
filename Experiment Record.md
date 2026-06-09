@@ -74,6 +74,21 @@
 
 后续比较应固定同一个 BEVFusion source checkpoint、同一个 target shift 与相同 adaptation budget。主表比较的是 `source-only`、`BN/TENT-style`、`vanilla/MOS-style`、`EMA or ST3D-style`、`fix_nan + freeze` 与 `Ours` 的 adaptation gain，而不是与最新 detector 做绝对 SOTA 排名。
 
+### 0.0.2 2026-06 B0 normal-shift 临界测试结论
+
+已完成 aligned clean、`s5` 与 `s7` 的 B0 source-only 测试，当前可靠对比如下：
+
+| eval_tag | mAP | NDS | 相对 clean mAP | 相对 clean NDS |
+|---|---:|---:|---:|---:|
+| `normal_shift_b0_clean_aligned` | 0.6419 | 0.6735 | 0.0000 | 0.0000 |
+| `normal_shift_b0_camera_style_s5` | 0.6287 | 0.6663 | -0.0132 | -0.0072 |
+| `normal_shift_b0_camera_style_s7` | 0.6287 | 0.6663 | -0.0132 | -0.0072 |
+| `normal_shift_b0_camera_resize_s5` | 0.6421 | 0.6737 | +0.0002 | +0.0002 |
+| `normal_shift_b0_lidar_sparsity_s5` | 0.6148 | 0.6545 | -0.0271 | -0.0190 |
+| `normal_shift_b0_lidar_sparsity_s7` | 0.6157 | 0.6557 | -0.0262 | -0.0178 |
+
+结论：`s7` 没有比 `s5` 更强，继续加 severity 暂无意义；当前最合适的临界场景仍是 `lidar_sparsity_s5/s7`。下一步不再调 severity，而是直接进入 BEVFusion TTA 临界测试：先跑 `B2 = fix_nan + F1 freeze + no aggregation`，若相对 B0 不能稳定恢复至少 `0.8 mAP` 或 `0.5 NDS`，则触发止损，转向 `CodeMerge-style head merging`、`small adapter` 或更换多模态基线。
+
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 
 `fog_s3_conflict_probe` 已完成，用 `B_L / B_C / B_Fused` 做 forward-only 分析，结论是：
