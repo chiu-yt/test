@@ -3,6 +3,27 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
+- `2026-06-09 10:11:40` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6663 mAP=0.6287 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s7`
+- `2026-06-09 00:16:24` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6557 mAP=0.6157 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_lidar_sparsity_s7`
+- `2026-06-08 18:17:02` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6545 mAP=0.6148 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_lidar_sparsity_s5`
+- `2026-06-08 18:06:33` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6737 mAP=0.6421 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_resize_s5`
+- `2026-06-08 17:52:01` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6663 mAP=0.6287 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s5`
+- `2026-06-08 13:00:34` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6713 mAP=0.6360 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s3`
+- `2026-06-08 12:43:10` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6735 mAP=0.6419 promoted=no`
+  - exp: `bevfusion_mos/default`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_clean_aligned`
 - `2026-06-05 17:34:50` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6722 mAP=0.6395 promoted=no`
   - exp: `bevfusion_mos/default`
   - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_lidar_sparsity_s1`
@@ -18,27 +39,6 @@
 - `2026-05-22 03:50:16` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_geometry_direct_reweight_ped` `best_iter=100` `NDS=0.6582 mAP=0.6158 promoted=no`
   - exp: `bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped`
   - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped/eval/eval_with_train`
-- `2026-05-20 00:05:21` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_geometry_direct_promote_ped_soft` `best_iter=40` `NDS=0.6586 mAP=0.6155 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_raw_geometry_direct_promote_ped_soft`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_geometry_direct_promote_ped_soft/eval/eval_with_train`
-- `2026-05-15 15:57:51` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_window_diag` `best_iter=100` `NDS=0.6586 mAP=0.6162 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_raw_window_diag`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_window_diag/eval/eval_with_train`
-- `2026-05-14 20:51:58` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_window_diag` `best_iter=30` `NDS=0.6564 mAP=0.6139 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_raw_window_diag`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_window_diag/eval/eval_with_train`
-- `2026-05-14 03:02:30` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_geom_relax_lidar_only_diag` `best_iter=10` `NDS=0.6569 mAP=0.6144 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_geom_relax_lidar_only_diag`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_lidar_only_diag/eval/eval_with_train`
-- `2026-05-11 20:51:12` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_geom_relax_diag` `best_iter=40` `NDS=0.6564 mAP=0.6137 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_geom_relax_diag`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_diag/eval/eval_with_train`
-- `2026-05-10 22:18:07` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_geom_relax_tta_ckpt` `best_iter=0` `NDS=0.6566 mAP=0.6138 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_geom_relax_tta_ckpt`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta_ckpt/eval/eval_with_train`
-- `2026-05-10 18:41:37` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_geom_relax_tta` `best_iter=0` `NDS=0.0000 mAP=0.0000 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_geom_relax_tta`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_geom_relax_tta/eval/eval_all_default/fog_s3_geom_relax_tta_eval`
 <!-- AUTO-EXPERIMENT-LOG:END -->
 
 ## 0.0 2026-05 路线重构结论
