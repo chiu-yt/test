@@ -3,6 +3,12 @@
 ## 0. Auto-maintained Experiment Ledger
 
 <!-- AUTO-EXPERIMENT-LOG:BEGIN -->
+- `2026-06-10 00:06:06` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `normal_shift_b2_lidar_sparsity_s7_noagg` `best_iter=0` `NDS=0.6556 mAP=0.6148 promoted=no`
+  - exp: `bevfusion_mos/normal_shift_b2_lidar_sparsity_s7_noagg`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s7_noagg/eval/eval_with_train`
+- `2026-06-09 21:46:58` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `normal_shift_b2_lidar_sparsity_s5_noagg_w2` `best_iter=0` `NDS=0.6554 mAP=0.6140 promoted=no`
+  - exp: `bevfusion_mos/normal_shift_b2_lidar_sparsity_s5_noagg_w2`
+  - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s5_noagg_w2/eval/eval_with_train`
 - `2026-06-09 10:11:40` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6663 mAP=0.6287 promoted=no`
   - exp: `bevfusion_mos/default`
   - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s7`
@@ -33,12 +39,6 @@
 - `2026-06-05 16:41:25` `tools/test.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `default` `best_epoch=10` `NDS=0.6717 mAP=0.6394 promoted=no`
   - exp: `bevfusion_mos/default`
   - eval_dir: `/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s1`
-- `2026-05-24 23:02:32` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_geometry_direct_reweight_ped_nms_bs2_noagg` `best_iter=20` `NDS=0.6587 mAP=0.6161 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped_nms_bs2_noagg`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped_nms_bs2_noagg/eval/eval_with_train`
-- `2026-05-22 03:50:16` `tools/train.py` `cfgs/nuscenes_models/bevfusion_mos.yaml` `fog_s3_raw_geometry_direct_reweight_ped` `best_iter=100` `NDS=0.6582 mAP=0.6158 promoted=no`
-  - exp: `bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped`
-  - eval_dir: `/root/autodl-tmp/OpenPCDet/output/nuscenes_models/bevfusion_mos/fog_s3_raw_geometry_direct_reweight_ped/eval/eval_with_train`
 <!-- AUTO-EXPERIMENT-LOG:END -->
 
 ## 0.0 2026-05 路线重构结论

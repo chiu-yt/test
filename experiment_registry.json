@@ -1,5 +1,51 @@
 [
   {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s7_noagg/eval/eval_with_train||checkpoint_iter_0||best_summary",
+    "updated_at": "2026-06-10T00:06:06",
+    "source": "tools/train.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/normal_shift_b2_lidar_sparsity_s7_noagg",
+    "extra_tag": "normal_shift_b2_lidar_sparsity_s7_noagg",
+    "eval_tag": null,
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "best_summary",
+    "eval_all": false,
+    "output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s7_noagg",
+    "eval_output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s7_noagg/eval/eval_with_train",
+    "ckpt_type": "iter",
+    "ckpt_id": 0,
+    "ckpt_label": "checkpoint_iter_0",
+    "metrics": {
+      "NDS": 0.6555544494825642,
+      "mAP": 0.61476254096016
+    },
+    "metrics_file": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s7_noagg/eval/eval_with_train/iter_0/val/final_result/data/metrics_summary.json"
+  },
+  {
+    "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s5_noagg_w2/eval/eval_with_train||checkpoint_iter_0||best_summary",
+    "updated_at": "2026-06-09T21:46:58",
+    "source": "tools/train.py",
+    "cfg_file": "cfgs/nuscenes_models/bevfusion_mos.yaml",
+    "exp_name": "bevfusion_mos/normal_shift_b2_lidar_sparsity_s5_noagg_w2",
+    "extra_tag": "normal_shift_b2_lidar_sparsity_s5_noagg_w2",
+    "eval_tag": null,
+    "note": "",
+    "promote_to_agents": false,
+    "record_mode": "best_summary",
+    "eval_all": false,
+    "output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s5_noagg_w2",
+    "eval_output_dir": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s5_noagg_w2/eval/eval_with_train",
+    "ckpt_type": "iter",
+    "ckpt_id": 0,
+    "ckpt_label": "checkpoint_iter_0",
+    "metrics": {
+      "NDS": 0.6553779374028285,
+      "mAP": 0.6140436823231632
+    },
+    "metrics_file": "/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/normal_shift_b2_lidar_sparsity_s5_noagg_w2/eval/eval_with_train/iter_0/val/final_result/data/metrics_summary.json"
+  },
+  {
     "record_key": "cfgs/nuscenes_models/bevfusion_mos.yaml||/home/zyt/OpenPCDet/output/nuscenes_models/bevfusion_mos/default/eval/epoch_10/val/normal_shift_b0_camera_style_s7||checkpoint_epoch_10.pth||single_eval",
     "updated_at": "2026-06-09T10:11:40",
     "source": "tools/test.py",
