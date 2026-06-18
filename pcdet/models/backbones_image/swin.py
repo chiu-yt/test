@@ -43,7 +43,10 @@ class WindowMSA(nn.Module):
                  qkv_bias=True,
                  qk_scale=None,
                  attn_drop_rate=0.,
-                 proj_drop_rate=0.):
+                 proj_drop_rate=0.,
+                 gated_attn_enabled=False,
+                 gated_attn_type='headwise',
+                 gated_attn_init_bias=2.0):
 
         super().__init__()
         self._is_init = False
@@ -70,6 +73,19 @@ class WindowMSA(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop_rate)
         self.proj = nn.Linear(embed_dims, embed_dims)
         self.proj_drop = nn.Dropout(proj_drop_rate)
+        self.gated_attn_enabled = gated_attn_enabled
+        self.gated_attn_type = gated_attn_type
+        self.head_embed_dims = head_embed_dims
+        if self.gated_attn_enabled:
+            if self.gated_attn_type == 'headwise':
+                gate_dims = num_heads
+            elif self.gated_attn_type == 'elementwise':
+                gate_dims = embed_dims
+            else:
+                raise ValueError('Unsupported gated attention type: %s' % self.gated_attn_type)
+            self.gate_proj = nn.Linear(embed_dims, gate_dims)
+            constant_init(self.gate_proj, 0.0)
+            nn.init.constant_(self.gate_proj.bias, gated_attn_init_bias)
 
         self.softmax = nn.Softmax(dim=-1)
 
@@ -85,6 +101,7 @@ class WindowMSA(nn.Module):
                 Wh*Ww, Wh*Ww), value should be between (-inf, 0].
         """
         B, N, C = x.shape
+        gate_input = x
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads,
                                   C // self.num_heads).permute(2, 0, 3, 1, 4)
         # make torchscript happy (cannot use tensor as tuple)
@@ -111,7 +128,15 @@ class WindowMSA(nn.Module):
 
         attn = self.attn_drop(attn)
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = (attn @ v).transpose(1, 2).contiguous()
+        if self.gated_attn_enabled:
+            gate = torch.sigmoid(self.gate_proj(gate_input))
+            if self.gated_attn_type == 'headwise':
+                gate = gate.unsqueeze(-1)
+            else:
+                gate = gate.view(B, N, self.num_heads, self.head_embed_dims)
+            x = x * gate
+        x = x.reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -151,8 +176,11 @@ class ShiftWindowMSA(nn.Module):
                  shift_size=0,
                  qkv_bias=True,
                  qk_scale=None,
-                 attn_drop_rate=0,
+                  attn_drop_rate=0,
                  proj_drop_rate=0,
+                 gated_attn_enabled=False,
+                 gated_attn_type='headwise',
+                 gated_attn_init_bias=2.0,
                  dropout_layer=dict(type='DropPath', drop_prob=0.)):
         super().__init__()
         self._is_init = False
@@ -168,7 +196,10 @@ class ShiftWindowMSA(nn.Module):
             qkv_bias=qkv_bias,
             qk_scale=qk_scale,
             attn_drop_rate=attn_drop_rate,
-            proj_drop_rate=proj_drop_rate,)
+            proj_drop_rate=proj_drop_rate,
+            gated_attn_enabled=gated_attn_enabled,
+            gated_attn_type=gated_attn_type,
+            gated_attn_init_bias=gated_attn_init_bias,)
         self.drop = DropPath(dropout_layer['drop_prob'])
 
     def forward(self, query, hw_shape):
@@ -313,6 +344,9 @@ class SwinBlock(nn.Module):
                  drop_rate=0.,
                  attn_drop_rate=0.,
                  drop_path_rate=0.,
+                 gated_attn_enabled=False,
+                 gated_attn_type='headwise',
+                 gated_attn_init_bias=2.0,
                  act_cfg=dict(type='GELU'),
                  norm_cfg=dict(type='LN'),
                  with_cp=False,):
@@ -331,6 +365,9 @@ class SwinBlock(nn.Module):
             qk_scale=qk_scale,
             attn_drop_rate=attn_drop_rate,
             proj_drop_rate=drop_rate,
+            gated_attn_enabled=gated_attn_enabled,
+            gated_attn_type=gated_attn_type,
+            gated_attn_init_bias=gated_attn_init_bias,
             dropout_layer=dict(type='DropPath', drop_prob=drop_path_rate),)
 
         self.norm2 = nn.LayerNorm(embed_dims)
@@ -404,6 +441,9 @@ class SwinBlockSequence(nn.Module):
                  drop_rate=0.,
                  attn_drop_rate=0.,
                  drop_path_rate=0.,
+                 gated_attn_enabled=False,
+                 gated_attn_type='headwise',
+                 gated_attn_init_bias=2.0,
                  downsample=None,
                  act_cfg=dict(type='GELU'),
                  norm_cfg=dict(type='LN'),
@@ -430,6 +470,9 @@ class SwinBlockSequence(nn.Module):
                 drop_rate=drop_rate,
                 attn_drop_rate=attn_drop_rate,
                 drop_path_rate=drop_path_rates[i],
+                gated_attn_enabled=gated_attn_enabled,
+                gated_attn_type=gated_attn_type,
+                gated_attn_init_bias=gated_attn_init_bias,
                 act_cfg=act_cfg,
                 norm_cfg=norm_cfg,
                 with_cp=with_cp,)
@@ -523,6 +566,9 @@ class SwinTransformer(nn.Module):
         drop_rate = self.model_cfg.DROP_RATE
         attn_drop_rate = self.model_cfg.ATTN_DROP_RATE
         drop_path_rate = self.model_cfg.DROP_PATH_RATE
+        gated_attn_enabled = self.model_cfg.get('GATED_ATTN_ENABLED', False)
+        gated_attn_type = self.model_cfg.get('GATED_ATTN_TYPE', 'headwise')
+        gated_attn_init_bias = self.model_cfg.get('GATED_ATTN_INIT_BIAS', 2.0)
         patch_norm = self.model_cfg.get('PATCH_NORM', True)
         out_indices = self.model_cfg.get('OUT_INDICES', [0, 1, 2, 3])
         with_cp = self.model_cfg.get('WITH_CP', False)
@@ -597,6 +643,9 @@ class SwinTransformer(nn.Module):
                 drop_rate=drop_rate,
                 attn_drop_rate=attn_drop_rate,
                 drop_path_rate=dpr[sum(depths[:i]):sum(depths[:i + 1])],
+                gated_attn_enabled=gated_attn_enabled,
+                gated_attn_type=gated_attn_type,
+                gated_attn_init_bias=gated_attn_init_bias,
                 downsample=downsample,
                 act_cfg=act_cfg,
                 norm_cfg=norm_cfg,

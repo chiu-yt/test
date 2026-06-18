@@ -83,6 +83,9 @@ MODEL:
         OUT_INDICES: [1, 2, 3]
         WITH_CP: False
         CONVERT_WEIGHTS: True
+        GATED_ATTN_ENABLED: False
+        GATED_ATTN_TYPE: headwise
+        GATED_ATTN_INIT_BIAS: 2.0
         INIT_CFG:
             type: Pretrained
             checkpoint: /root/autodl-tmp/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
