@@ -397,20 +397,29 @@ class Detector3DTemplate(nn.Module):
         epoch = checkpoint.get('epoch', -1)
         it = checkpoint.get('it', 0.0)
 
-        self._load_state_dict(checkpoint['model_state'], strict=True)
+        state_dict, update_model_state = self._load_state_dict(checkpoint['model_state'], strict=False)
+        for key in state_dict:
+            if key not in update_model_state and logger is not None:
+                logger.info('Not updated weight %s: %s' % (key, str(state_dict[key].shape)))
 
         if optimizer is not None:
             if 'optimizer_state' in checkpoint and checkpoint['optimizer_state'] is not None:
                 logger.info('==> Loading optimizer parameters from checkpoint %s to %s'
                             % (filename, 'CPU' if to_cpu else 'GPU'))
-                optimizer.load_state_dict(checkpoint['optimizer_state'])
+                try:
+                    optimizer.load_state_dict(checkpoint['optimizer_state'])
+                except ValueError as err:
+                    logger.info('==> Skip optimizer state due to mismatch: %s' % str(err))
             else:
                 assert filename[-4] == '.', filename
                 src_file, ext = filename[:-4], filename[-3:]
                 optimizer_filename = '%s_optim.%s' % (src_file, ext)
                 if os.path.exists(optimizer_filename):
                     optimizer_ckpt = torch.load(optimizer_filename, map_location=loc_type)
-                    optimizer.load_state_dict(optimizer_ckpt['optimizer_state'])
+                    try:
+                        optimizer.load_state_dict(optimizer_ckpt['optimizer_state'])
+                    except ValueError as err:
+                        logger.info('==> Skip optimizer state due to mismatch: %s' % str(err))
 
         if 'version' in checkpoint:
             print('==> Checkpoint trained from version: %s' % checkpoint['version'])
