@@ -240,7 +240,7 @@ class DepthLSSTransform(nn.Module):
             )
             for c in range(on_img.shape[0]):
                 masked_coords = cur_coords[c, on_img[c]].long()
-                masked_dist = dist[c, on_img[c]]
+                masked_dist = dist[c, on_img[c]].to(depth.dtype)
                 depth[b, c, 0, masked_coords[:, 0], masked_coords[:, 1]] = masked_dist
 
         extra_rots = lidar_aug_matrix[..., :3, :3]
