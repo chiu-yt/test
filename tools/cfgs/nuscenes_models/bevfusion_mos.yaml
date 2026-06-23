@@ -250,6 +250,22 @@ TTA:
         CKPT_SOURCES: ['iter', 'epoch']
         RESERVE_EPOCH_CKPTS: 1
 
+    # DPO-style Reliable Hungarian Matcher. Disabled by default; enable with
+    # --set TTA.DPO_MATCHER.ENABLED True for the first DPO landing version.
+    DPO_MATCHER:
+        ENABLED: False
+        DISTURB_MODE: tta_aug
+        IOU_WEIGHT: 1.0
+        L1_WEIGHT: 2.0
+        HUNG_MATCH_RATE_POS: 0.05
+        HUNG_MATCH_RATE_NEG: 0.05
+        MIN_MATCHES: 1
+        DROP_REJECTED: True
+        DROP_UNMATCHED: False
+        BOOST_ACCEPTED: True
+        ACCEPT_SCORE: 1.0
+        LOG_INTERVAL: 50
+
 # ================= 自训练参数 =================
 SELF_TRAIN:
     # 方案A（已固化）：S1 最优阈值，仅收紧 traffic_cone；其余类别回到安全版

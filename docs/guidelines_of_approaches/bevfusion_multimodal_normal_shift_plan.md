@@ -265,6 +265,12 @@
 
 > **先在当前 BEVFusion 单车多模态主链上，用最小结构改动做出稳定、可解释、可发表的正常场景 adaptation 结果；恶劣天气与协同感知都保留，但不再抢占第一篇论文主线。**
 
+### 8.1 近期模块取舍：Swin gate 与 DPO-lite
+
+Qwen-style Swin gate 当前定位为备份/辅助模块，而不是第一主线。它对齐的是 gated attention 的 attention-output gate 思想，source-side finetune 有小幅稳定增益，但 source-only/TTA 增益不足；完整重训继续作为低风险备选实验，优先使用 no-AMP 规避 full train 数值不稳定。
+
+DPO 的可迁移部分优先落在 `M1: cross-modal reliability calibration` 下。官方 DPO 的 SAM 双 backward 与 `AnchorHeadSingle` BEV feature perturbation 不直接适配当前 BEVFusion/TransFusionHead 主链；第一版只迁移作者方案中最关键且最轻量的 Reliable Hungarian Matcher：原预测伪标签与扰动后预测按类别做 Hungarian matching，cost 使用 DPO 风格 `-3D IoU + 2 * L1`，按历史 cost 的 accept/reject 分位数 boost 稳定框、丢弃最不稳定框。实现入口保持在 `pcdet/tta_methods/mos.py`，配置为 `TTA.DPO_MATCHER`，默认关闭，便于逐版本存档和回退。
+
 ## 9. 近期具体执行清单
 
 1. 为 `nuScenes + BEVFusion` 定义三种 normal-scene shift 配置：`camera_style`、`camera_resize`、`lidar_sparsity`。

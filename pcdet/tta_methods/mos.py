@@ -54,6 +54,8 @@ class MOS(object):
         self.max_ckpt_cache = 4
         self.total_samples_seen = 0
         self.fallback_dim = 256
+        self.dpo_cost_history = []
+        self.dpo_matcher_stats = {}
         
         # Initialize a temporary model shell for feature extraction (shared weights)
         # We only need the structure, weights will be loaded dynamically
@@ -149,6 +151,10 @@ class MOS(object):
                 )
             del super_model
 
+        self.dpo_matcher_stats = {}
+        if self._dpo_matcher_enabled():
+            self._apply_dpo_matcher(batch_dict)
+
         geometry_filter_stats = _get_geometry_filter_stats()
 
         # 5. Inject Pseudo Labels into Batch
@@ -231,6 +237,7 @@ class MOS(object):
             tb_dict['tail_ps/trailer'] = float(pseudo_hist.get('trailer', 0))
             tb_dict['tail_ps/traffic_cone'] = float(pseudo_hist.get('traffic_cone', 0))
             _add_geometry_filter_stats_to_logs(geometry_filter_stats, tb_dict, disp_dict)
+            self._add_dpo_matcher_stats_to_logs(tb_dict, disp_dict)
 
         if self.rank == 0 and (self.total_samples_seen % 50 == 0):
             self.logger.info(
@@ -248,6 +255,82 @@ class MOS(object):
         
         # Return items for logging
         return final_loss.item(), tb_dict, disp_dict
+
+    def _dpo_matcher_enabled(self):
+        dpo_cfg = self.tta_cfg.get('DPO_MATCHER', None)
+        return bool(dpo_cfg is not None and dpo_cfg.get('ENABLED', False))
+
+    def _apply_dpo_matcher(self, batch_dict):
+        dpo_cfg = self.tta_cfg.get('DPO_MATCHER', None)
+        if dpo_cfg is None:
+            return
+
+        disturbed_batch = copy.deepcopy(batch_dict)
+        self._inject_pseudo_labels(disturbed_batch)
+
+        disturb_mode = str(dpo_cfg.get('DISTURB_MODE', 'tta_aug')).lower()
+        if disturb_mode == 'tta_aug':
+            disturbed_batch = TTA_augmentation(self.dataset, disturbed_batch)
+
+        was_training = self.model.training
+        self.model.eval()
+        with torch.no_grad():
+            disturbed_pred_dicts, _ = self.model(disturbed_batch)
+        if was_training:
+            self.model.train()
+
+        stats = self._filter_new_pseudo_labels_by_dpo(batch_dict, disturbed_pred_dicts, dpo_cfg)
+        self.dpo_matcher_stats = stats
+
+        log_interval = int(dpo_cfg.get('LOG_INTERVAL', 50))
+        if self.rank == 0 and log_interval > 0 and (self.total_samples_seen % log_interval == 0):
+            self.logger.info(
+                f"[MM-MOS][DPO] samples_seen={self.total_samples_seen} | "
+                f"before={stats.get('num_before', 0)} | after={stats.get('num_after', 0)} | "
+                f"matched={stats.get('num_matched', 0)} | accepted={stats.get('num_accepted', 0)} | "
+                f"rejected={stats.get('num_rejected', 0)} | keep={stats.get('keep_ratio', 0.0):.3f}"
+            )
+
+    def _filter_new_pseudo_labels_by_dpo(self, batch_dict, disturbed_pred_dicts, dpo_cfg):
+        frame_ids = batch_dict.get('frame_id', [])
+        stats = {
+            'num_before': 0,
+            'num_after': 0,
+            'num_matched': 0,
+            'num_accepted': 0,
+            'num_rejected': 0,
+            'keep_ratio': 1.0,
+        }
+
+        for b_idx, raw_fid in enumerate(frame_ids):
+            fid = raw_fid.item() if hasattr(raw_fid, 'item') else raw_fid
+            if fid not in NEW_PSEUDO_LABELS or b_idx >= len(disturbed_pred_dicts):
+                continue
+
+            gt_infos = NEW_PSEUDO_LABELS[fid]
+            filtered_infos, frame_stats = _apply_dpo_hungarian_filter(
+                gt_infos, disturbed_pred_dicts[b_idx], dpo_cfg, self.dpo_cost_history
+            )
+            NEW_PSEUDO_LABELS[fid] = filtered_infos
+            for key in ['num_before', 'num_after', 'num_matched', 'num_accepted', 'num_rejected']:
+                stats[key] += int(frame_stats.get(key, 0))
+
+        if stats['num_before'] > 0:
+            stats['keep_ratio'] = float(stats['num_after']) / float(stats['num_before'])
+        return stats
+
+    def _add_dpo_matcher_stats_to_logs(self, tb_dict, disp_dict):
+        stats = self.dpo_matcher_stats
+        if not stats:
+            return
+        tb_dict['dpo_match/num_before'] = float(stats.get('num_before', 0))
+        tb_dict['dpo_match/num_after'] = float(stats.get('num_after', 0))
+        tb_dict['dpo_match/num_matched'] = float(stats.get('num_matched', 0))
+        tb_dict['dpo_match/num_accepted'] = float(stats.get('num_accepted', 0))
+        tb_dict['dpo_match/num_rejected'] = float(stats.get('num_rejected', 0))
+        tb_dict['dpo_match/keep_ratio'] = float(stats.get('keep_ratio', 1.0))
+        disp_dict['dpo_keep'] = f"{float(stats.get('keep_ratio', 1.0)):.2f}"
+        disp_dict['dpo_rej'] = str(int(stats.get('num_rejected', 0)))
 
     def _should_memory_update(self):
         """是否启用并执行 memory ensemble 更新（首个 batch 不更新，后续更新）。"""
@@ -756,6 +839,127 @@ def hungarian_match_diff(bbox_pred_1, bbox_pred_2):
     r, c = linear_sum_assignment(cost)
     return float(cost[r, c].sum()) if r.size > 0 else 100.0
 
+
+def _slice_gt_infos(gt_infos, keep_mask):
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    if gt_boxes is None:
+        return gt_infos
+
+    keep_mask = np.asarray(keep_mask, dtype=bool)
+    return {
+        'gt_boxes': gt_boxes[keep_mask],
+        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
+        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
+        'memory_counter': gt_infos.get('memory_counter', np.zeros(gt_boxes.shape[0]))[keep_mask]
+    }
+
+
+def _apply_dpo_hungarian_filter(gt_infos, disturbed_pred_dict, dpo_cfg, cost_history):
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    stats = {
+        'num_before': 0,
+        'num_after': 0,
+        'num_matched': 0,
+        'num_accepted': 0,
+        'num_rejected': 0,
+    }
+    if gt_boxes is None or len(gt_boxes) == 0:
+        return gt_infos, stats
+
+    stats['num_before'] = int(gt_boxes.shape[0])
+    pred_boxes = disturbed_pred_dict.get('pred_boxes', None)
+    pred_labels = disturbed_pred_dict.get('pred_labels', None)
+    if pred_boxes is None or pred_labels is None or pred_boxes.shape[0] == 0:
+        stats['num_after'] = int(gt_boxes.shape[0])
+        return gt_infos, stats
+
+    device = pred_boxes.device
+    ps_boxes = torch.as_tensor(gt_boxes[:, :7], device=device, dtype=torch.float32)
+    ps_labels = torch.as_tensor(np.abs(gt_boxes[:, 7]).astype(np.int64), device=device).long()
+    pred_boxes = pred_boxes[:, :7].to(device=device, dtype=torch.float32)
+    pred_labels = pred_labels.to(device=device).long().view(-1)
+
+    keep_mask = np.ones(gt_boxes.shape[0], dtype=bool)
+    accepted_mask = np.zeros(gt_boxes.shape[0], dtype=bool)
+    drop_unmatched = bool(dpo_cfg.get('DROP_UNMATCHED', False))
+    drop_rejected = bool(dpo_cfg.get('DROP_REJECTED', True))
+    boost_accepted = bool(dpo_cfg.get('BOOST_ACCEPTED', True))
+    accept_score = float(dpo_cfg.get('ACCEPT_SCORE', 1.0))
+    min_matches = int(dpo_cfg.get('MIN_MATCHES', 1))
+    num_cls = len(cfg.CLASS_NAMES)
+
+    for cls_id in range(1, num_cls + 1):
+        ps_idx = torch.nonzero(ps_labels == cls_id, as_tuple=False).view(-1)
+        pred_idx = torch.nonzero(pred_labels == cls_id, as_tuple=False).view(-1)
+        if ps_idx.numel() == 0:
+            continue
+        if pred_idx.numel() == 0:
+            if drop_unmatched:
+                keep_mask[ps_idx.detach().cpu().numpy()] = False
+            continue
+
+        cls_cost = _compute_dpo_hungarian_cost(
+            ps_boxes[ps_idx], pred_boxes[pred_idx], dpo_cfg
+        )
+        if cls_cost is None or cls_cost.numel() == 0:
+            continue
+
+        row_ind, col_ind = linear_sum_assignment(cls_cost.detach().cpu().numpy())
+        if row_ind.size == 0:
+            continue
+
+        row_ind_t = torch.as_tensor(row_ind, device=cls_cost.device, dtype=torch.long)
+        col_ind_t = torch.as_tensor(col_ind, device=cls_cost.device, dtype=torch.long)
+        matched_cost = cls_cost[row_ind_t, col_ind_t].detach().cpu().numpy()
+        stats['num_matched'] += int(matched_cost.shape[0])
+        cost_history.extend([float(x) for x in matched_cost.tolist()])
+
+        if len(cost_history) < max(min_matches, 1):
+            continue
+
+        accept_rate = float(dpo_cfg.get('HUNG_MATCH_RATE_POS', 0.05))
+        reject_rate = float(dpo_cfg.get('HUNG_MATCH_RATE_NEG', 0.05))
+        accept_th = np.quantile(np.asarray(cost_history, dtype=np.float32), accept_rate)
+        reject_th = np.quantile(np.asarray(cost_history, dtype=np.float32), 1.0 - reject_rate)
+
+        global_rows = ps_idx[row_ind_t].detach().cpu().numpy()
+        local_accept = matched_cost < accept_th
+        local_reject = matched_cost > reject_th
+        accepted_mask[global_rows[local_accept]] = True
+        stats['num_accepted'] += int(local_accept.sum())
+
+        if drop_rejected:
+            keep_mask[global_rows[local_reject]] = False
+        stats['num_rejected'] += int(local_reject.sum())
+
+        if drop_unmatched:
+            matched_global = set(global_rows.tolist())
+            cls_global = ps_idx.detach().cpu().numpy().tolist()
+            unmatched_global = [idx for idx in cls_global if idx not in matched_global]
+            if unmatched_global:
+                keep_mask[np.asarray(unmatched_global, dtype=np.int64)] = False
+
+    if boost_accepted and accepted_mask.any():
+        gt_boxes = gt_boxes.copy()
+        gt_boxes[accepted_mask, 8] = np.maximum(gt_boxes[accepted_mask, 8], accept_score)
+        gt_infos = dict(gt_infos)
+        gt_infos['gt_boxes'] = gt_boxes
+
+    filtered_infos = _slice_gt_infos(gt_infos, keep_mask)
+    stats['num_after'] = int(filtered_infos['gt_boxes'].shape[0])
+    return filtered_infos, stats
+
+
+def _compute_dpo_hungarian_cost(ps_boxes, pred_boxes, dpo_cfg):
+    if ps_boxes.shape[0] == 0 or pred_boxes.shape[0] == 0:
+        return None
+
+    iou_weight = float(dpo_cfg.get('IOU_WEIGHT', 1.0))
+    l1_weight = float(dpo_cfg.get('L1_WEIGHT', 2.0))
+    iou_cost = -iou3d_nms_utils.boxes_iou3d_gpu(ps_boxes, pred_boxes)
+    reg_cost = torch.cdist(ps_boxes, pred_boxes, p=1)
+    return iou_weight * iou_cost + l1_weight * reg_cost
+
 def aggregate_model_via_state_dict(model_path_list, model_weights, dataset, ram_cache, main_model=None, logger=None):
     weights = [float(w.cpu().item()) if isinstance(w, torch.Tensor) else float(w) for w in model_weights]
     agg_state = {}
@@ -838,9 +1042,8 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             NEW_PSEUDO_LABELS[fid] = _apply_adaptive_noisy_class_cap(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_nan_box_filter(NEW_PSEUDO_LABELS[fid])
 
-    mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', {})
-    use_mem = bool(mem_cfg is not None and mem_cfg.get('ENABLED', False) and need_update)
-    if not use_mem:
+    mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', None)
+    if mem_cfg is None or not bool(mem_cfg.get('ENABLED', False) and need_update):
         # 不做融合时，同步覆盖历史缓存
         PSEUDO_LABELS.update(NEW_PSEUDO_LABELS)
         return

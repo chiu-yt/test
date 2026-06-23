@@ -89,6 +89,12 @@
 
 结论：`s7` 没有比 `s5` 更强，继续加 severity 暂无意义；当前最合适的临界场景仍是 `lidar_sparsity_s5/s7`。下一步不再调 severity，而是直接进入 BEVFusion TTA 临界测试：先跑 `B2 = fix_nan + F1 freeze + no aggregation`，若相对 B0 不能稳定恢复至少 `0.8 mAP` 或 `0.5 NDS`，则触发止损，转向 `CodeMerge-style head merging`、`small adapter` 或更换多模态基线。
 
+### 0.0.3 2026-06 Qwen-style gate 与 DPO 判断
+
+Qwen-style Swin attention gate 已完成第一轮验证。该模块在 `WindowMSA` 中采用 `attn @ v -> sigmoid gate -> output projection` 的 headwise 门控形式，机制上对齐 gated-attention/Qwen 的“attention output gate”，但当前实现使用独立 `gate_proj(hidden_states)`，不是原仓库中 `q_proj` 同时切出 `query_states` 与 `gate_score` 的逐行复刻。实验上，未重训 source-only 与 TTA 收益很弱；source-side finetune 后 clean、`lidar_sparsity_s5/s7` 有小幅稳定正增益，但幅度不足以单独作为第一主线。完整 source retrain 可继续跑 10 epoch 作为备份分支；AMP 下 full train 出现 `loss=inf` 已确认主要是 AMP 数值不稳定，no-AMP 训练是当前更可靠设置。
+
+DPO 代码位于 `/home/zyt/code/DPO-main`，官方实现基于旧 OpenPCDet/ST3D，核心是 LiDAR-only TTA-3OD：SAM 权重扰动、BEV feature perturbation、Reliable Hungarian Matcher 与 early Hungarian cutoff。对当前 `nuScenes + BEVFusion + MOS` 主线，不能整套替换训练循环：原 DPO 主循环自带双 backward/SAM optimizer、`wandb`、`exit()` 与 KITTI/Waymo 单类配置；BEV perturbation 直接写在 `AnchorHeadSingle`，而当前 BEVFusion 使用 `TransFusionHead`。可直接吸收的是 Reliable Hungarian Matcher：比较原始伪标签与扰动后预测，用 `-3D IoU + 2 * L1` 的 Hungarian cost 筛掉扰动敏感 pseudo labels，并记录 cost/keep 统计。第一版按最小改动接入 `pcdet/tta_methods/mos.py`，默认关闭，通过 `TTA.DPO_MATCHER.ENABLED` 启用；SAM 与 BEV feature perturbation 暂不进入第一版，后续只有在 matcher 有正信号后再单独评估。
+
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 
 `fog_s3_conflict_probe` 已完成，用 `B_L / B_C / B_Fused` 做 forward-only 分析，结论是：
