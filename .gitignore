@@ -23,8 +23,7 @@ env/
 data/
 **/data/
 
-# Nested standalone project not tracked here
-MOS-main/
+
 
 # Training / evaluation outputs
 output/
@@ -41,6 +40,7 @@ wandb/
 tmp/
 temp/
 .sisyphus/
+.omo/
 fog_s3_conflict_probe/
 depth_entropy/
 geometry probe/
@@ -58,3 +58,6 @@ fog_s3_geom_relax_lidar_only_diag/
 
 # Local agent / experiment notes
 git_workflow_notes.md
+sparse_lidar_multimodal_3d_uda_methods.md
+
+
