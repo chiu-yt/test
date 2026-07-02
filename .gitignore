@@ -41,6 +41,9 @@ tmp/
 temp/
 .sisyphus/
 .omo/
+.agents/
+docs/
+docker/
 fog_s3_conflict_probe/
 depth_entropy/
 geometry probe/
@@ -57,7 +60,8 @@ fog_s3_geom_relax_lidar_only_diag/
 *.tar.gz
 
 # Local agent / experiment notes
+*.md
+!Experiment Record.md
 git_workflow_notes.md
 sparse_lidar_multimodal_3d_uda_methods.md
-
-
+skills-lock.json
