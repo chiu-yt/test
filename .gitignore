@@ -65,3 +65,4 @@ fog_s3_geom_relax_lidar_only_diag/
 git_workflow_notes.md
 sparse_lidar_multimodal_3d_uda_methods.md
 skills-lock.json
+sync_server.sh
