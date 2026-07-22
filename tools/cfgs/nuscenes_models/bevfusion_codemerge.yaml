@@ -6,6 +6,17 @@ MODEL:
             checkpoint: /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
 
 DATA_CONFIG:
+    _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
+    DATA_SPLIT: {
+        'train': val,
+        'test': val
+    }
+    INFO_PATH: {
+        'train': [nuscenes_infos_10sweeps_val.pkl],
+        'test': [nuscenes_infos_10sweeps_val.pkl],
+    }
+    BALANCED_RESAMPLING: False
+    POINT_CLOUD_RANGE: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
     CORRUPTION:
         ENABLED: True
         APPLY_IN: ['train', 'test']
