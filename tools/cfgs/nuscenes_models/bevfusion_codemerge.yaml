@@ -3,7 +3,27 @@ _BASE_CONFIG_: cfgs/nuscenes_models/bevfusion_mos.yaml
 MODEL:
     IMAGE_BACKBONE:
         INIT_CFG:
-            checkpoint: /home/zyt/code/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
+            checkpoint: /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
+
+DATA_CONFIG:
+    CORRUPTION:
+        ENABLED: True
+        APPLY_IN: ['train', 'test']
+        LIDAR_FOG:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_FOG:
+            ENABLED: False
+            SEVERITY: 1
+        LIDAR_SPARSITY:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_STYLE:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_GEOMETRY:
+            ENABLED: False
+            SEVERITY: 1
 
 TTA:
     METHOD: codemerge
