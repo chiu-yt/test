@@ -5,6 +5,7 @@ import tqdm
 import numpy as np
 from torch.nn.utils import clip_grad_norm_
 from pcdet.utils import common_utils
+from pcdet.tta_methods.codemerge import CodeMergeTTA
 from pcdet.tta_methods.mos import MOS  # 导入你修改的 v31.0 MOS
 
 def checkpoint_state(model, optimizer, epoch, it):
@@ -40,7 +41,9 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
         logger.info(f'理论复现：检测到 TTA 配置，方法: {tta_cfg.METHOD}')
         logger.info(f'多模态融合系数 Alpha: {tta_cfg.get("ALPHA", 0.4)}')
         # 实例化我们在 pcdet/tta_methods/mos.py 中定义的 MOS 类
-        mos_worker = MOS(model, tta_cfg, logger, dataset=train_loader.dataset)
+        tta_method = str(tta_cfg.get('METHOD', 'mos')).lower()
+        worker_cls = CodeMergeTTA if tta_method == 'codemerge' else MOS
+        mos_worker = worker_cls(model, tta_cfg, logger, dataset=train_loader.dataset)
         # 将当前 run 的 ckpt_dir 显式传给 MOS，避免 _find_ckpt_dir 误命中历史目录
         if ckpt_save_dir is not None:
             mos_worker.run_ckpt_dir = str(ckpt_save_dir)

@@ -1,0 +1,15 @@
+_BASE_CONFIG_: cfgs/nuscenes_models/bevfusion_mos.yaml
+
+MODEL:
+    IMAGE_BACKBONE:
+        INIT_CFG:
+            checkpoint: /home/zyt/code/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
+
+TTA:
+    METHOD: codemerge
+
+    CODEMERGE_SETTING:
+        SELECT_TOPK: 5
+        RIDGE_DAMPING: 0.001
+        MERGE_SCALE: 0.85
+        LOG_INTERVAL: 50

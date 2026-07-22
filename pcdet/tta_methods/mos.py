@@ -128,8 +128,9 @@ class MOS(object):
         )
 
         super_model = None
+        tta_method = str(self.tta_cfg.get('METHOD', 'mos')).lower()
         if (
-            self.tta_cfg.METHOD == 'mos'
+            tta_method in ['mos', 'codemerge']
             and start_ckpt <= self.total_samples_seen
             and ckpt_dir
         ):

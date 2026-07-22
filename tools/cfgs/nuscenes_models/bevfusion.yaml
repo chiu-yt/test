@@ -88,7 +88,7 @@ MODEL:
         GATED_ATTN_INIT_BIAS: 2.0
         INIT_CFG:
             type: Pretrained
-            checkpoint: /root/autodl-tmp/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
+            checkpoint: /home/zyt/code/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
     
     NECK:
         NAME: GeneralizedLSSFPN
@@ -114,6 +114,15 @@ MODEL:
         NAME: ConvFuser
         IN_CHANNEL: 336
         OUT_CHANNEL: 256
+
+    TTA_FUSION_ADAPTER:
+        NAME: BEVFusionTTAAdapter
+        ENABLED: False
+        IN_CHANNEL: 256
+        IMAGE_CHANNEL: 80
+        LIDAR_CHANNEL: 256
+        HIDDEN_CHANNEL: 64
+        RESIDUAL_SCALE_INIT: 0.0
     
     BACKBONE_2D:
         NAME: BaseBEVBackbone
@@ -208,4 +217,12 @@ OPTIMIZATION:
     GRAD_NORM_CLIP: 35
 
     LOSS_SCALE_FP16: 32
+
+TTA:
+    ENABLED: False
+    FREEZE:
+        ENABLED: False
+        ADAPTER_ONLY: False
+        TRAINABLE_MODULE: tta_fusion_adapter
+        MODULES: []
   

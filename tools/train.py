@@ -70,6 +70,13 @@ def _force_module_eval_and_freeze(module):
     module.train = types.MethodType(_train_keep_eval, module)
 
 
+def _unfreeze_module(module):
+    for param in module.parameters():
+        param.requires_grad = True
+
+    module.train()
+
+
 def apply_tta_freeze_strategy(model, cfg, logger):
     tta_cfg = cfg.get('TTA', None)
     if tta_cfg is None:
@@ -84,6 +91,25 @@ def apply_tta_freeze_strategy(model, cfg, logger):
     frozen_modules = []
 
     logger.info('TTA Freeze: 开始执行冻结策略')
+    if freeze_cfg.get('ADAPTER_ONLY', False):
+        adapter_name = str(freeze_cfg.get('TRAINABLE_MODULE', 'tta_fusion_adapter'))
+        adapter_module = getattr(model_ref, adapter_name, None)
+        if adapter_module is None:
+            logger.warning(f'TTA Freeze: `{adapter_name}` 不存在或未启用，回退到 MODULES 列表冻结')
+        else:
+            for child_name, cur_module in model_ref.named_children():
+                if child_name in [adapter_name, 'module_list'] or cur_module is None:
+                    continue
+                param_num = sum(p.numel() for p in cur_module.parameters())
+                _force_module_eval_and_freeze(cur_module)
+                frozen_modules.append(child_name)
+                logger.info(f'TTA Freeze: 已冻结 `{child_name}`，参数量={param_num}')
+
+            _unfreeze_module(adapter_module)
+            trainable_adapter_params = sum(p.numel() for p in adapter_module.parameters() if p.requires_grad)
+            logger.info(f'TTA Freeze: 仅训练 `{adapter_name}`，可训练参数量={trainable_adapter_params}')
+            module_names = []
+
     for module_name in module_names:
         if not hasattr(model_ref, module_name):
             logger.warning(f'TTA Freeze: 模型中不存在模块 `{module_name}`，已跳过')

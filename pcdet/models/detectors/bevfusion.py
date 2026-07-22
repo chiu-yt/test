@@ -11,7 +11,7 @@ class BevFusion(Detector3DTemplate):
         self.module_topology = [
             'vfe', 'backbone_3d', 'map_to_bev_module', 'pfe',
             'image_backbone','neck','vtransform','fuser',
-            'backbone_2d', 'dense_head',  'point_head', 'roi_head'
+            'tta_fusion_adapter', 'backbone_2d', 'dense_head',  'point_head', 'roi_head'
         ]
         self.module_list = self.build_networks()
        
@@ -57,6 +57,18 @@ class BevFusion(Detector3DTemplate):
         model_info_dict['module_list'].append(fuser_module)
         model_info_dict['num_bev_features'] = self.model_cfg.FUSER.OUT_CHANNEL
         return fuser_module, model_info_dict
+
+    def build_tta_fusion_adapter(self, model_info_dict):
+        adapter_cfg = self.model_cfg.get('TTA_FUSION_ADAPTER', None)
+        if adapter_cfg is None or not adapter_cfg.get('ENABLED', False):
+            return None, model_info_dict
+
+        adapter_module = fuser.__all__[adapter_cfg.NAME](
+            model_cfg=adapter_cfg,
+            input_channels=model_info_dict['num_bev_features']
+        )
+        model_info_dict['module_list'].append(adapter_module)
+        return adapter_module, model_info_dict
 
     def forward(self, batch_dict):
         export_conflict_analysis = self._forward_only_conflict_analysis_enabled() and not self.training
