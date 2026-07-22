@@ -7,6 +7,12 @@ MODEL:
 
 DATA_CONFIG:
     _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
+    CAMERA_CONFIG:
+        USE_CAMERA: True
+        IMAGE:
+            FINAL_DIM: [256,704]
+            RESIZE_LIM_TRAIN: [0.38, 0.55]
+            RESIZE_LIM_TEST: [0.48, 0.48]
     DATA_SPLIT: {
         'train': val,
         'test': val
@@ -35,9 +41,37 @@ DATA_CONFIG:
         IMAGE_GEOMETRY:
             ENABLED: False
             SEVERITY: 1
+    DATA_PROCESSOR:
+        - NAME: mask_points_and_boxes_outside_range
+          REMOVE_OUTSIDE_BOXES: True
+        - NAME: shuffle_points
+          SHUFFLE_ENABLED: {
+            'train': True,
+            'test': False
+          }
+        - NAME: transform_points_to_voxels
+          VOXEL_SIZE: [0.075, 0.075, 0.2]
+          MAX_POINTS_PER_VOXEL: 10
+          MAX_NUMBER_OF_VOXELS: {
+            'train': 120000,
+            'test': 160000
+          }
+        - NAME: image_calibrate
+        - NAME: image_normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
 
 TTA:
     METHOD: codemerge
+
+    FREEZE:
+        ENABLED: False
+
+    DPO_MATCHER:
+        ENABLED: False
+
+    MOS_SETTING:
+        AGGREGATE_START_CKPT: 10
 
     CODEMERGE_SETTING:
         SELECT_TOPK: 5
