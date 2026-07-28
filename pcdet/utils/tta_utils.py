@@ -79,6 +79,43 @@ def _ensure_gt_boxes_10_np(gt_boxes: np.ndarray):
         raise ValueError(f"Unexpected gt_boxes shape: {gt_boxes.shape}")
 
 
+def _transform_proposal_boxes_np(proposal_boxes: np.ndarray, aug_dict):
+    if proposal_boxes is None:
+        return proposal_boxes
+    if isinstance(proposal_boxes, torch.Tensor):
+        proposal_boxes = proposal_boxes.detach().cpu().numpy()
+    elif not isinstance(proposal_boxes, np.ndarray):
+        proposal_boxes = np.asarray(proposal_boxes)
+    if proposal_boxes.ndim != 2 or proposal_boxes.shape[0] == 0:
+        return proposal_boxes
+
+    boxes = proposal_boxes.copy()
+
+    if bool(aug_dict.get('flip_x', False)):
+        boxes[:, 1] = -boxes[:, 1]
+        boxes[:, 6] = -boxes[:, 6]
+
+    if bool(aug_dict.get('flip_y', False)):
+        boxes[:, 0] = -boxes[:, 0]
+        boxes[:, 6] = -(boxes[:, 6] + np.pi)
+
+    if 'noise_rot' in aug_dict:
+        noise_rot = float(aug_dict['noise_rot'])
+        rot_mat = common_utils.angle2matrix(torch.tensor(noise_rot)).cpu().numpy().astype(np.float32)
+        boxes[:, :3] = boxes[:, :3] @ rot_mat.T
+        boxes[:, 6] += noise_rot
+
+    if 'noise_scale' in aug_dict:
+        noise_scale = float(aug_dict['noise_scale'])
+        boxes[:, :6] *= noise_scale
+
+    if 'noise_translate' in aug_dict:
+        noise_translate = np.asarray(aug_dict['noise_translate'], dtype=np.float32).reshape(3)
+        boxes[:, :3] += noise_translate
+
+    return boxes
+
+
 def TTA_augmentation(dataset, target_batch, strength='mid'):
     if not hasattr(TTA_augmentation, "_printed"):
         print("[DEBUG] target_batch keys:", list(target_batch.keys()))
@@ -97,6 +134,7 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
     new_ori_shape_list = []
     new_img_aug_matrix_list = []
     new_lidar_aug_matrix_list = []
+    new_tta_proposal_boxes_list = []
 
     point_cloud_range = getattr(dataset, 'point_cloud_range', None)
     if point_cloud_range is None and cfg.get('DATA_CONFIG', None) is not None:
@@ -171,6 +209,8 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
             single_dict['img_aug_matrix'] = target_batch['img_aug_matrix'][b_idx]
         if 'image_paths' in target_batch:
             single_dict['image_paths'] = target_batch['image_paths'][b_idx]
+        if 'tta_proposal_boxes' in target_batch:
+            single_dict['tta_proposal_boxes'] = target_batch['tta_proposal_boxes'][b_idx]
 
 # 几何映射（有些 imgaug 或后续 image branch 会依赖）
         for k in ['lidar2camera', 'lidar2image', 'camera2ego', 'camera_intrinsics', 'camera2lidar']:
@@ -183,6 +223,12 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
         new_lidar_aug_matrix_list.append(
             torch.from_numpy(_build_lidar_aug_matrix_from_single_dict(single_dict)).float().cuda()
         )
+
+        if 'tta_proposal_boxes' in single_dict:
+            proposal_boxes = _transform_proposal_boxes_np(single_dict['tta_proposal_boxes'], single_dict)
+            if proposal_boxes is None:
+                proposal_boxes = np.zeros((0, 9), dtype=np.float32)
+            new_tta_proposal_boxes_list.append(torch.from_numpy(proposal_boxes).float().cuda())
 
         # 4.1) 读取增强后的 boxes
         aug_boxes = _ensure_gt_boxes_10_np(single_dict['gt_boxes'])
@@ -256,6 +302,20 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
         target_batch['img_aug_matrix'] = torch.stack(new_img_aug_matrix_list, dim=0)
     if len(new_lidar_aug_matrix_list) > 0:
         target_batch['lidar_aug_matrix'] = torch.stack(new_lidar_aug_matrix_list, dim=0)
+
+    if len(new_tta_proposal_boxes_list) > 0:
+        max_prop = max(t.shape[0] for t in new_tta_proposal_boxes_list)
+        prop_dim = new_tta_proposal_boxes_list[0].shape[1]
+        proposal_boxes = torch.zeros((b_size, max_prop, prop_dim), dtype=new_tta_proposal_boxes_list[0].dtype, device='cuda')
+        proposal_mask = torch.zeros((b_size, max_prop), dtype=torch.bool, device='cuda')
+        for b_idx, prop_boxes in enumerate(new_tta_proposal_boxes_list):
+            cur_num = prop_boxes.shape[0]
+            if cur_num == 0:
+                continue
+            proposal_boxes[b_idx, :cur_num, :] = prop_boxes
+            proposal_mask[b_idx, :cur_num] = True
+        target_batch['tta_proposal_boxes'] = proposal_boxes
+        target_batch['tta_proposal_mask'] = proposal_mask
 
     # 9) 重新生成 Voxel（如果 batch 里存在 voxel keys）
     if 'voxels' in target_batch:

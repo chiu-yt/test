@@ -88,7 +88,7 @@ MODEL:
         GATED_ATTN_INIT_BIAS: 2.0
         INIT_CFG:
             type: Pretrained
-            checkpoint: /home/zyt/code/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
+            checkpoint: /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
     
     NECK:
         NAME: GeneralizedLSSFPN
@@ -118,10 +118,17 @@ MODEL:
     TTA_FUSION_ADAPTER:
         NAME: BEVFusionTTAAdapter
         ENABLED: False
+        USE_PROPOSAL_CONTEXT: True
         IN_CHANNEL: 256
         IMAGE_CHANNEL: 80
         LIDAR_CHANNEL: 256
         HIDDEN_CHANNEL: 64
+        TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+        MIN_PROPOSAL_SCORE: 0.24
+        MIN_ACTIVE_PROPOSALS: 1
+        TOPK_PER_CLASS: 8
+        ROUTER_MODE: shared_plus_class
+        POOL_SIZE: 3
         RESIDUAL_SCALE_INIT: 0.0
     
     BACKBONE_2D:

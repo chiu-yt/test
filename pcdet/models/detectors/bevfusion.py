@@ -65,7 +65,9 @@ class BevFusion(Detector3DTemplate):
 
         adapter_module = fuser.__all__[adapter_cfg.NAME](
             model_cfg=adapter_cfg,
-            input_channels=model_info_dict['num_bev_features']
+            input_channels=model_info_dict['num_bev_features'],
+            point_cloud_range=model_info_dict['point_cloud_range'],
+            class_names=self.class_names
         )
         model_info_dict['module_list'].append(adapter_module)
         return adapter_module, model_info_dict

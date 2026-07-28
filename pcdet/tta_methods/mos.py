@@ -158,6 +158,10 @@ class MOS(object):
 
         geometry_filter_stats = _get_geometry_filter_stats()
 
+        proposal_boxes = self._build_tta_proposal_boxes(batch_dict)
+        if proposal_boxes is not None:
+            batch_dict['tta_proposal_boxes'] = proposal_boxes
+
         # 5. Inject Pseudo Labels into Batch
         self._inject_pseudo_labels(batch_dict)
 
@@ -340,6 +344,85 @@ class MOS(object):
             return False
         # 与原版语义对齐：cur_it > 0 时更新；这里用累计样本数近似首步判定
         return self.total_samples_seen > 0
+
+    def _build_tta_proposal_boxes(self, batch_dict):
+        adapter_cfg = cfg.MODEL.get('TTA_FUSION_ADAPTER', None)
+        if adapter_cfg is None or not adapter_cfg.get('ENABLED', False):
+            return None
+        if not adapter_cfg.get('USE_PROPOSAL_CONTEXT', False):
+            return None
+
+        frame_ids = batch_dict.get('frame_id', [])
+        if len(frame_ids) == 0:
+            return None
+
+        target_class_names = list(adapter_cfg.get('TARGET_CLASSES', []))
+        target_class_ids = {
+            idx + 1 for idx, name in enumerate(cfg.CLASS_NAMES) if name in target_class_names
+        }
+        if len(target_class_ids) == 0:
+            return None
+
+        score_thresh = np.asarray(cfg.SELF_TRAIN.SCORE_THRESH, dtype=np.float32)
+        min_score = float(adapter_cfg.get('MIN_PROPOSAL_SCORE', 0.0))
+        topk_per_class = int(adapter_cfg.get('TOPK_PER_CLASS', 0))
+
+        proposal_boxes = []
+        for raw_fid in frame_ids:
+            fid = raw_fid.item() if hasattr(raw_fid, 'item') else raw_fid
+            infos = NEW_PSEUDO_LABELS.get(fid, None)
+            if infos is None:
+                proposal_boxes.append(np.zeros((0, 9), dtype=np.float32))
+                continue
+
+            boxes = np.asarray(infos.get('gt_boxes', np.zeros((0, 9), dtype=np.float32)), dtype=np.float32)
+            if boxes.ndim != 2 or boxes.shape[0] == 0 or boxes.shape[1] < 9:
+                proposal_boxes.append(np.zeros((0, 9), dtype=np.float32))
+                continue
+
+            cls_ids = boxes[:, -2].astype(np.int64)
+            scores = boxes[:, -1]
+            valid = np.isfinite(scores) & np.isfinite(cls_ids) & (cls_ids > 0)
+            valid &= np.isin(cls_ids, list(target_class_ids))
+
+            if not np.any(valid):
+                proposal_boxes.append(np.zeros((0, 9), dtype=np.float32))
+                continue
+
+            boxes = boxes[valid]
+            cls_ids = cls_ids[valid]
+            scores = scores[valid]
+
+            keep_parts = []
+            for cls_id in sorted(target_class_ids):
+                cls_mask = cls_ids == cls_id
+                if not np.any(cls_mask):
+                    continue
+
+                cls_boxes = boxes[cls_mask]
+                cls_scores = scores[cls_mask]
+                cls_score_thresh = max(min_score, float(score_thresh[cls_id - 1]))
+                cls_keep = cls_scores >= cls_score_thresh
+                if not np.any(cls_keep):
+                    continue
+
+                cls_boxes = cls_boxes[cls_keep]
+                cls_scores = cls_scores[cls_keep]
+                if topk_per_class > 0 and cls_boxes.shape[0] > topk_per_class:
+                    order = np.argsort(-cls_scores)[:topk_per_class]
+                    cls_boxes = cls_boxes[order]
+
+                keep_parts.append(cls_boxes)
+
+            if len(keep_parts) == 0:
+                proposal_boxes.append(np.zeros((0, 9), dtype=np.float32))
+                continue
+
+            merged = np.concatenate(keep_parts, axis=0)
+            order = np.argsort(-merged[:, -1])
+            proposal_boxes.append(merged[order].astype(np.float32, copy=False))
+
+        return proposal_boxes
 
     def _collect_hist_from_gt_boxes(self, gt_boxes):
         """统计 batch 内各类别框数量，兼容 [B, M, C] 或 [M, C]，类别列取最后一列。"""
