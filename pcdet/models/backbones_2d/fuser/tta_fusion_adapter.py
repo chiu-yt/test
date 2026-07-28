@@ -10,6 +10,7 @@ class BEVFusionTTAAdapter(nn.Module):
         super().__init__()
         self.model_cfg = model_cfg
         channels = int(model_cfg.get('IN_CHANNEL', input_channels))
+        self.channels = channels
         image_channels = int(model_cfg.get('IMAGE_CHANNEL', 80))
         lidar_channels = int(model_cfg.get('LIDAR_CHANNEL', 256))
         hidden_channels = int(model_cfg.get('HIDDEN_CHANNEL', max(channels // 4, 32)))
@@ -161,7 +162,7 @@ class BEVFusionTTAAdapter(nn.Module):
 
     def _proposal_residual_map(self, shared_context, proposal_boxes, proposal_mask):
         batch_size, _, height, width = shared_context.shape
-        residual_map = shared_context.new_zeros((batch_size, shared_context.shape[1], height, width))
+        residual_map = shared_context.new_zeros((batch_size, self.channels, height, width))
         if proposal_boxes is None or proposal_mask is None:
             return residual_map
 
