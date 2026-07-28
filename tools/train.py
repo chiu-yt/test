@@ -208,7 +208,12 @@ def main():
 
     model.train()
     if dist_train:
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[cfg.LOCAL_RANK % torch.cuda.device_count()])
+        find_unused_parameters = bool(cfg.get('TTA', None) and cfg.TTA.ENABLED)
+        model = nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[cfg.LOCAL_RANK % torch.cuda.device_count()],
+            find_unused_parameters=find_unused_parameters,
+        )
 
     # 创建学习率调度器
     lr_scheduler, lr_warmup_scheduler = build_scheduler(
