@@ -150,6 +150,50 @@ def _transform_proposal_boxes_np(proposal_boxes: np.ndarray, aug_dict):
     return boxes
 
 
+def _normalize_tta_proposal_boxes_np(proposal_boxes: np.ndarray):
+    if proposal_boxes is None:
+        return proposal_boxes
+    if isinstance(proposal_boxes, torch.Tensor):
+        proposal_boxes = proposal_boxes.detach().cpu().numpy()
+    elif not isinstance(proposal_boxes, np.ndarray):
+        proposal_boxes = np.asarray(proposal_boxes)
+    if proposal_boxes.ndim != 2:
+        return proposal_boxes
+    if proposal_boxes.shape[0] == 0:
+        return np.zeros((0, 9), dtype=np.float32)
+
+    boxes = proposal_boxes.astype(np.float32, copy=False)
+    if boxes.shape[1] == 9:
+        return boxes
+
+    normalized = np.zeros((boxes.shape[0], 9), dtype=np.float32)
+    normalized[:, :min(7, boxes.shape[1])] = boxes[:, :min(7, boxes.shape[1])]
+
+    if boxes.shape[1] == 8:
+        normalized[:, 7] = boxes[:, 7]
+        normalized[:, 8] = 1.0
+        return normalized
+
+    if boxes.shape[1] == 10:
+        normalized[:, 7] = boxes[:, 9]
+        normalized[:, 8] = 1.0
+        return normalized
+
+    if boxes.shape[1] >= 11:
+        col9 = boxes[:, 9]
+        col10 = boxes[:, 10]
+        col9_int_like = np.isfinite(col9) & np.isclose(col9, np.rint(col9), atol=1e-3)
+        col10_int_like = np.isfinite(col10) & np.isclose(col10, np.rint(col10), atol=1e-3)
+        use_col10_as_cls = col10_int_like & (~col9_int_like | (np.abs(col10) >= np.abs(col9)))
+        normalized[:, 7] = np.where(use_col10_as_cls, col10, col9)
+        normalized[:, 8] = np.where(use_col10_as_cls, col9, col10)
+        return normalized
+
+    normalized[:, 7] = boxes[:, -2]
+    normalized[:, 8] = boxes[:, -1]
+    return normalized
+
+
 def TTA_augmentation(dataset, target_batch, strength='mid'):
     if not hasattr(TTA_augmentation, "_printed"):
         print("[DEBUG] target_batch keys:", list(target_batch.keys()))
@@ -260,6 +304,7 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
 
         if 'tta_proposal_boxes' in single_dict:
             proposal_boxes = _transform_proposal_boxes_np(single_dict['tta_proposal_boxes'], single_dict)
+            proposal_boxes = _normalize_tta_proposal_boxes_np(proposal_boxes)
             if proposal_boxes is None:
                 proposal_boxes = np.zeros((0, 9), dtype=np.float32)
             new_tta_proposal_boxes_list.append(torch.from_numpy(proposal_boxes).float().cuda())
