@@ -30,6 +30,8 @@ def _new_spcra_stats(enabled):
         'enabled': 1.0 if enabled else 0.0,
         'clean_boxes': 0.0,
         'perturbed_boxes': 0.0,
+        'clean_valid_boxes': 0.0,
+        'perturbed_valid_boxes': 0.0,
         'matched_boxes': 0.0,
         'match_rate': 0.0,
         'reliability_mean': 1.0,
@@ -360,6 +362,7 @@ class MOS(object):
         sidecars, stats = compute_spcra_reliability(
             clean_pred_dicts,
             perturbed_pred_dicts,
+            disturbed_batch.get('lidar_aug_matrix', None),
             max_center_distance=spcra_cfg.get('MAX_CENTER_DISTANCE', 1.0),
             reliability_floor=spcra_cfg.get('RELIABILITY_FLOOR', 0.05),
         )
@@ -373,11 +376,13 @@ class MOS(object):
         log_interval = int(spcra_cfg.get('LOG_INTERVAL', 50))
         if self.rank == 0 and log_interval > 0 and self.total_samples_seen % log_interval == 0:
             self.logger.info(
-                '[MM-MOS][SPCRA] samples_seen=%d | clean=%d | perturbed=%d | matched=%d | '
+                '[MM-MOS][SPCRA] samples_seen=%d | clean=%d/%d | perturbed=%d/%d | matched=%d | '
                 'match_rate=%.3f | reliability=%.3f',
                 self.total_samples_seen,
                 int(stats['clean_boxes']),
+                int(stats.get('clean_valid_boxes', 0.0)),
                 int(stats['perturbed_boxes']),
+                int(stats.get('perturbed_valid_boxes', 0.0)),
                 int(stats['matched_boxes']),
                 float(stats['match_rate']),
                 float(stats['reliability_mean']),
@@ -394,7 +399,10 @@ class MOS(object):
 
     def _add_spcra_stats_to_logs(self, tb_dict, disp_dict):
         stats = self.spcra_stats
-        for key in ['enabled', 'clean_boxes', 'perturbed_boxes', 'matched_boxes', 'match_rate', 'reliability_mean', 'reliability_min']:
+        for key in [
+            'enabled', 'clean_boxes', 'perturbed_boxes', 'clean_valid_boxes', 'perturbed_valid_boxes',
+            'matched_boxes', 'match_rate', 'reliability_mean', 'reliability_min'
+        ]:
             tb_dict['spcra/%s' % key] = float(stats.get(key, 0.0))
         disp_dict['spcra_rel'] = '%.2f' % float(stats.get('reliability_mean', 1.0))
 

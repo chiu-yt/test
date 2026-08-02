@@ -95,6 +95,35 @@ Qwen-style Swin attention gate 已完成第一轮验证。该模块在 `WindowMS
 
 DPO 代码位于 `/home/zyt/code/DPO-main`，官方实现基于旧 OpenPCDet/ST3D，核心是 LiDAR-only TTA-3OD：SAM 权重扰动、BEV feature perturbation、Reliable Hungarian Matcher 与 early Hungarian cutoff。对当前 `nuScenes + BEVFusion + MOS` 主线，不能整套替换训练循环：原 DPO 主循环自带双 backward/SAM optimizer、`wandb`、`exit()` 与 KITTI/Waymo 单类配置；BEV perturbation 直接写在 `AnchorHeadSingle`，而当前 BEVFusion 使用 `TransFusionHead`。可直接吸收的是 Reliable Hungarian Matcher：比较原始伪标签与扰动后预测，用 `-3D IoU + 2 * L1` 的 Hungarian cost 筛掉扰动敏感 pseudo labels，并记录 cost/keep 统计。第一版按最小改动接入 `pcdet/tta_methods/mos.py`，默认关闭，通过 `TTA.DPO_MATCHER.ENABLED` 启用；SAM 与 BEV feature perturbation 暂不进入第一版，后续只有在 matcher 有正信号后再单独评估。
 
+### 0.0.4 2026-08 M1/M2 全模块 smoke 与工程修复
+
+`SPCRA + RG-PLM + SG-DFA + TTA fusion adapter` 已完成 2 卡 smoke 级联调试，当前状态是“链路已跑通，正式数值待完整 run/eval 回填”。本轮不是重新跑 `B0` 或 `F1 + D1.3`，这些结果已在上方 ledger 和 B2 记录中存档；本轮目标是验证新模块能在 `nuScenes + BEVFusion + lidar_sparsity` 路径下共同工作。
+
+本轮修复的真实运行问题：
+
+- `pcdet/utils/tta_utils.py`: `rotate_points_along_z()` 改为使用 `common_utils.check_numpy_to_torch()`，修复裸 `check_numpy_to_torch` 引用；
+- `pcdet/tta_methods/mos.py`: `_new_rg_plm_stats()` 补齐 `reliability_sum` 与 `score_scale_sum`，修复 `RG_PLM` 首次累加 `KeyError`；
+- `pcdet/utils/tta_utils.py` / `pcdet/tta_methods/reliability.py`: SPCRA 现在会把扰动预测通过 `lidar_aug_matrix` 逆变换回 clean frame，再在有效 box 上做匹配；无有效匹配时该框可靠性记为 0，而不是继续沿用 floor 值；
+- `pcdet/tta_methods/mos.py`: SPCRA 日志补充 `clean_valid_boxes` / `perturbed_valid_boxes`，`match_rate` 改为按有效框数计算，避免固定 200 proposal 分母掩盖真实匹配率；
+- `tools/train.py`: `ADAPTER_ONLY=True` 时检测头只冻结参数但保持 `train()`，避免 `dense_head.eval()` 导致 `batch_dict['loss']` 缺失；
+- `pcdet/utils/tta_utils.py`: `tta_proposal_boxes` 在 batch 合并前统一归一化为 9 列，修复 9/11 列 proposal 混合导致的 shape mismatch；
+- `tools/scripts/torch_train.sh`: 从裸 `torchrun` 改为 `${PYTHON_BIN:-python} -m torch.distributed.run`，降低 PATH 依赖。
+
+已验证的 smoke 现象：
+
+- 2 卡训练可进入 TTA-MOS 主循环，并至少完成前几个 iter；日志中出现 `loss_raw/loss_w/tail_gt/tail_ps`，说明 loss 路径与伪标签注入路径已开始工作；
+- 当前显存不是瓶颈：RTX 4080S 双卡上每卡 batch=1 时约 `8.4GB / 6.6GB`；
+- 主要资源风险是 CPU 内存，因此正式全模块 run 建议使用 `--workers 2`，而不是盲目提高 DataLoader worker 数；
+- `--batch_size 2` 在 `tools/train.py` 的 DDP 语义下是总 batch size，2 卡会变成每卡 1；若不传则使用 YAML 的 `BATCH_SIZE_PER_GPU=2`，2 卡等价总 batch 4。
+- 本轮 SPCRA 修复后，后续正式 run 的观察重点不再是 `matched/200`，而是 `matched / min(clean_valid_boxes, perturbed_valid_boxes)` 以及 `reliability_mean` 是否还卡在 floor 附近。
+
+正式全模块 run 命名建议：
+
+- `full_spcra_rgplm_sgdfa_s5_2gpu`: 若继续沿此前 B0/B2 s5 主对照；
+- `full_spcra_rgplm_sgdfa_s7_2gpu`: 若要与已归档的 `normal_shift_b2_lidar_sparsity_s7_noagg` 对齐。
+
+`TTA.MOS_SETTING.AGGREGATE_START_CKPT 999999` 的作用是推迟/禁用 checkpoint aggregation，避免当前主模块效果被 MOS checkpoint merging 混入。第一轮正式全开应先保持 no-aggregation；消融阶段再单独评估 aggregation。
+
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 
 `fog_s3_conflict_probe` 已完成，用 `B_L / B_C / B_Fused` 做 forward-only 分析，结论是：

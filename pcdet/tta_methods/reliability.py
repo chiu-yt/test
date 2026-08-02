@@ -3,6 +3,8 @@ import math
 import numpy as np
 import torch
 
+from pcdet.utils.tta_utils import _apply_lidar_aug_matrix_to_boxes_np
+
 
 def apply_sparse_point_perturbation(batch_dict, drop_rate):
     """Drop a sparse subset of points while retaining at least one per frame."""
@@ -44,9 +46,27 @@ def _prediction_arrays(pred_dict):
     )
 
 
+def _prediction_valid_mask(boxes, labels, scores):
+    if boxes.shape[0] == 0:
+        return np.zeros((0,), dtype=bool)
+
+    valid = np.isfinite(boxes[:, :7]).all(axis=1)
+    if boxes.shape[1] >= 6:
+        valid &= np.isfinite(boxes[:, 3:6]).all(axis=1)
+        valid &= np.all(boxes[:, 3:6] > 0.0, axis=1)
+
+    labels = np.asarray(labels).reshape(-1)
+    scores = np.asarray(scores).reshape(-1)
+    valid &= np.isfinite(labels)
+    valid &= np.isfinite(scores)
+    valid &= labels > 0
+    return valid
+
+
 def compute_spcra_reliability(
     clean_pred_dicts,
     perturbed_pred_dicts,
+    perturbed_lidar_aug_matrices=None,
     max_center_distance=1.0,
     reliability_floor=0.05,
 ):
@@ -55,6 +75,8 @@ def compute_spcra_reliability(
     stats = {
         'clean_boxes': 0,
         'perturbed_boxes': 0,
+        'clean_valid_boxes': 0,
+        'perturbed_valid_boxes': 0,
         'matched_boxes': 0,
         'reliability_sum': 0.0,
         'reliability_min': 1.0,
@@ -65,18 +87,47 @@ def compute_spcra_reliability(
     for clean_pred, perturbed_pred in zip(clean_pred_dicts, perturbed_pred_dicts):
         clean_boxes, clean_labels, clean_scores, clean_box_tensor = _prediction_arrays(clean_pred)
         perturbed_boxes, perturbed_labels, perturbed_scores, _ = _prediction_arrays(perturbed_pred)
-        reliability = np.full(clean_boxes.shape[0], floor, dtype=np.float32)
+        clean_valid_mask = _prediction_valid_mask(clean_boxes, clean_labels, clean_scores)
+        perturbed_valid_mask = _prediction_valid_mask(perturbed_boxes, perturbed_labels, perturbed_scores)
+        if perturbed_lidar_aug_matrices is not None:
+            perturbed_index = len(sidecars)
+            if perturbed_index < len(perturbed_lidar_aug_matrices):
+                perturbed_boxes = _apply_lidar_aug_matrix_to_boxes_np(
+                    perturbed_boxes,
+                    perturbed_lidar_aug_matrices[perturbed_index],
+                    inverse=True,
+                )
+
+        reliability = np.zeros(clean_boxes.shape[0], dtype=np.float32)
         used_perturbed = set()
 
         stats['clean_boxes'] += int(clean_boxes.shape[0])
         stats['perturbed_boxes'] += int(perturbed_boxes.shape[0])
-        for clean_index in range(clean_boxes.shape[0]):
-            candidate_indices = np.where(clean_labels[clean_index] == perturbed_labels)[0]
+        stats['clean_valid_boxes'] += int(clean_valid_mask.sum())
+        stats['perturbed_valid_boxes'] += int(perturbed_valid_mask.sum())
+
+        clean_valid_indices = np.where(clean_valid_mask)[0]
+        perturbed_valid_indices = np.where(perturbed_valid_mask)[0]
+        if clean_valid_indices.size == 0 or perturbed_valid_indices.size == 0:
+            if clean_box_tensor is not None and torch.is_tensor(clean_box_tensor):
+                sidecars.append(torch.as_tensor(reliability, dtype=torch.float32, device=clean_box_tensor.device))
+            else:
+                sidecars.append(torch.as_tensor(reliability, dtype=torch.float32))
+            continue
+
+        clean_valid_boxes = clean_boxes[clean_valid_indices]
+        clean_valid_labels = clean_labels[clean_valid_indices]
+        perturbed_valid_boxes = perturbed_boxes[perturbed_valid_indices]
+        perturbed_valid_labels = perturbed_labels[perturbed_valid_indices]
+        perturbed_valid_scores = perturbed_scores[perturbed_valid_indices]
+
+        for local_index, clean_index in enumerate(clean_valid_indices.tolist()):
+            candidate_indices = np.where(clean_valid_labels[local_index] == perturbed_valid_labels)[0]
             candidate_indices = [idx for idx in candidate_indices.tolist() if idx not in used_perturbed]
             if not candidate_indices:
                 continue
 
-            center_delta = perturbed_boxes[candidate_indices, :3] - clean_boxes[clean_index, :3]
+            center_delta = perturbed_valid_boxes[candidate_indices, :3] - clean_valid_boxes[local_index, :3]
             center_distances = np.linalg.norm(center_delta, axis=1)
             nearest_local = int(np.argmin(center_distances))
             perturbed_index = candidate_indices[nearest_local]
@@ -85,12 +136,12 @@ def compute_spcra_reliability(
                 continue
 
             used_perturbed.add(perturbed_index)
-            dimension_scale = max(float(np.abs(clean_boxes[clean_index, 3:6]).mean()), 1e-3)
+            dimension_scale = max(float(np.abs(clean_valid_boxes[local_index, 3:6]).mean()), 1e-3)
             dimension_cost = float(
-                np.abs(clean_boxes[clean_index, 3:6] - perturbed_boxes[perturbed_index, 3:6]).mean()
+                np.abs(clean_valid_boxes[local_index, 3:6] - perturbed_valid_boxes[perturbed_index, 3:6]).mean()
                 / dimension_scale
             )
-            score_cost = abs(float(clean_scores[clean_index] - perturbed_scores[perturbed_index]))
+            score_cost = abs(float(clean_scores[clean_index] - perturbed_valid_scores[perturbed_index]))
             cost = center_distance / distance_limit + 0.5 * dimension_cost + 0.5 * score_cost
             reliability[clean_index] = max(floor, min(1.0, math.exp(-cost)))
             stats['matched_boxes'] += 1
@@ -104,6 +155,7 @@ def compute_spcra_reliability(
             stats['reliability_min'] = min(stats['reliability_min'], float(reliability.min()))
 
     clean_count = max(float(stats['clean_boxes']), 1.0)
-    stats['match_rate'] = float(stats['matched_boxes']) / clean_count
+    valid_count = max(min(float(stats['clean_valid_boxes']), float(stats['perturbed_valid_boxes'])), 1.0)
+    stats['match_rate'] = float(stats['matched_boxes']) / valid_count
     stats['reliability_mean'] = stats['reliability_sum'] / clean_count
     return sidecars, stats

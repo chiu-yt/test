@@ -123,31 +123,53 @@ def _transform_proposal_boxes_np(proposal_boxes: np.ndarray, aug_dict):
     if proposal_boxes.ndim != 2 or proposal_boxes.shape[0] == 0:
         return proposal_boxes
 
-    boxes = proposal_boxes.copy()
+    lidar_aug_matrix = _build_lidar_aug_matrix_from_single_dict(aug_dict)
+    return _apply_lidar_aug_matrix_to_boxes_np(proposal_boxes, lidar_aug_matrix, inverse=False)
 
-    if bool(aug_dict.get('flip_x', False)):
-        boxes[:, 1] = -boxes[:, 1]
-        boxes[:, 6] = -boxes[:, 6]
 
-    if bool(aug_dict.get('flip_y', False)):
-        boxes[:, 0] = -boxes[:, 0]
-        boxes[:, 6] = -(boxes[:, 6] + np.pi)
+def _apply_lidar_aug_matrix_to_boxes_np(boxes: np.ndarray, lidar_aug_matrix, inverse=False):
+    if boxes is None:
+        return boxes
+    if isinstance(boxes, torch.Tensor):
+        boxes = boxes.detach().cpu().numpy()
+    elif not isinstance(boxes, np.ndarray):
+        boxes = np.asarray(boxes)
+    if boxes.ndim != 2 or boxes.shape[0] == 0:
+        return boxes
+    if boxes.shape[1] < 7:
+        return boxes.astype(np.float32, copy=False)
 
-    if 'noise_rot' in aug_dict:
-        noise_rot = float(aug_dict['noise_rot'])
-        rot_mat = common_utils.angle2matrix(torch.tensor(noise_rot)).cpu().numpy().astype(np.float32)
-        boxes[:, :3] = boxes[:, :3] @ rot_mat.T
-        boxes[:, 6] += noise_rot
+    if isinstance(lidar_aug_matrix, torch.Tensor):
+        lidar_aug_matrix = lidar_aug_matrix.detach().cpu().numpy()
+    elif not isinstance(lidar_aug_matrix, np.ndarray):
+        lidar_aug_matrix = np.asarray(lidar_aug_matrix)
+    if lidar_aug_matrix.ndim != 2 or lidar_aug_matrix.shape[0] < 3 or lidar_aug_matrix.shape[1] < 4:
+        return boxes.astype(np.float32, copy=False)
 
-    if 'noise_scale' in aug_dict:
-        noise_scale = float(aug_dict['noise_scale'])
-        boxes[:, :6] *= noise_scale
+    aug_matrix = lidar_aug_matrix.astype(np.float32, copy=False)
+    transform = aug_matrix[:3, :3]
+    translate = aug_matrix[:3, 3]
+    linear = np.linalg.inv(transform) if inverse else transform
+    scale = float(np.linalg.norm(transform[0, :2]))
+    if not np.isfinite(scale) or scale <= 0.0:
+        scale = 1.0
 
-    if 'noise_translate' in aug_dict:
-        noise_translate = np.asarray(aug_dict['noise_translate'], dtype=np.float32).reshape(3)
-        boxes[:, :3] += noise_translate
+    transformed = boxes.astype(np.float32, copy=True)
+    if inverse:
+        transformed[:, :3] = (transformed[:, :3] - translate) @ linear.T
+        if transformed.shape[1] >= 6:
+            transformed[:, 3:6] /= scale
+    else:
+        transformed[:, :3] = transformed[:, :3] @ linear.T + translate
+        if transformed.shape[1] >= 6:
+            transformed[:, 3:6] *= scale
 
-    return boxes
+    heading = np.stack((np.cos(transformed[:, 6]), np.sin(transformed[:, 6])), axis=1)
+    heading = heading @ linear[:2, :2].T
+    heading_norm = np.clip(np.linalg.norm(heading, axis=1, keepdims=True), a_min=1e-6, a_max=None)
+    heading = heading / heading_norm
+    transformed[:, 6] = np.arctan2(heading[:, 1], heading[:, 0])
+    return transformed
 
 
 def _normalize_tta_proposal_boxes_np(proposal_boxes: np.ndarray):
@@ -195,9 +217,6 @@ def _normalize_tta_proposal_boxes_np(proposal_boxes: np.ndarray):
 
 
 def TTA_augmentation(dataset, target_batch, strength='mid'):
-    if not hasattr(TTA_augmentation, "_printed"):
-        print("[DEBUG] target_batch keys:", list(target_batch.keys()))
-        TTA_augmentation._printed = True
     """
     针对 BEVFusion 和多 Batch 优化的 TTA 增强函数
     支持 imgaug：必须把 camera_imgs（以及可能的 image_shape 等meta）传入 single_dict
