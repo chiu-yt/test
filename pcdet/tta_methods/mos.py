@@ -43,6 +43,8 @@ def _new_rg_plm_stats(enabled):
         'boxes_before': 0.0,
         'boxes_after': 0.0,
         'boxes_filtered': 0.0,
+        'reliability_sum': 0.0,
+        'score_scale_sum': 0.0,
         'reliability_mean': 1.0,
         'score_scale_mean': 1.0,
     }

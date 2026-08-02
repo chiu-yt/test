@@ -3,6 +3,7 @@
 set -x
 NGPUS=$1
 PY_ARGS=${@:2}
+PYTHON_BIN=${PYTHON_BIN:-python}
 
 while true
 do
@@ -14,5 +15,4 @@ do
 done
 echo $PORT
 
-torchrun --nproc_per_node=${NGPUS} --rdzv_endpoint=localhost:${PORT} train.py --launcher pytorch ${PY_ARGS}
-
+${PYTHON_BIN} -m torch.distributed.run --nproc_per_node=${NGPUS} --rdzv_endpoint=localhost:${PORT} train.py --launcher pytorch ${PY_ARGS}
