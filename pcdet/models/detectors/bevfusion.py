@@ -403,6 +403,16 @@ class BevFusion(Detector3DTemplate):
             **tb_dict
         }
 
+        adapter_metrics = {
+            'sg_dfa/density_mean': batch_dict.get('tta_adapter_density_mean', None),
+            'sg_dfa/density_nonzero': batch_dict.get('tta_adapter_density_nonzero', None),
+            'sg_dfa/gate_mean': batch_dict.get('tta_adapter_gate_mean', None),
+            'sg_dfa/residual_mean': batch_dict.get('tta_adapter_residual_mean', None),
+        }
+        for metric_name, metric_value in adapter_metrics.items():
+            if torch.is_tensor(metric_value):
+                tb_dict[metric_name] = float(metric_value.detach().float().mean().item())
+
         loss = loss_trans
         return loss, tb_dict, disp_dict
 

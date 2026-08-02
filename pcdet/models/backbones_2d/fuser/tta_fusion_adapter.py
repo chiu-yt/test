@@ -21,10 +21,14 @@ class BEVFusionTTAAdapter(nn.Module):
         self.topk_per_class = int(model_cfg.get('TOPK_PER_CLASS', 0))
         self.router_mode = str(model_cfg.get('ROUTER_MODE', 'shared_plus_class')).lower()
         self.pool_size = int(model_cfg.get('POOL_SIZE', 3))
+        density_cfg = model_cfg.get('SG_DFA', None)
+        self.sg_dfa_enabled = bool(density_cfg is not None and density_cfg.get('ENABLED', False))
 
         self.fused_proj = nn.Conv2d(channels, hidden_channels, kernel_size=1, bias=False)
         self.image_proj = nn.Conv2d(image_channels, hidden_channels, kernel_size=1, bias=False)
         self.lidar_proj = nn.Conv2d(lidar_channels, hidden_channels, kernel_size=1, bias=False)
+        if self.sg_dfa_enabled:
+            self.density_proj = nn.Conv2d(1, hidden_channels, kernel_size=1, bias=False)
 
         self.shared_refine = nn.Sequential(
             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
@@ -260,8 +264,25 @@ class BEVFusionTTAAdapter(nn.Module):
         if lidar_bev is not None:
             shared_context = shared_context + self.lidar_proj(lidar_bev)
 
+        density_map = batch_dict.get('tta_density_map', None)
+        density_mean = fused_bev.new_zeros(())
+        density_nonzero = fused_bev.new_zeros(())
+        if self.sg_dfa_enabled and density_map is not None:
+            density_map = F.interpolate(
+                density_map.float(),
+                size=shared_context.shape[-2:],
+                mode='bilinear',
+                align_corners=False,
+            )
+            shared_context = shared_context + self.density_proj(density_map)
+            density_gate = 0.5 + 0.5 * torch.sigmoid(density_map)
+            density_mean = density_map.detach().mean()
+            density_nonzero = (density_map.detach() > 0).float().mean()
+        else:
+            density_gate = 1.0
+
         shared_residual = self.shared_refine(shared_context)
-        shared_gate = self.shared_gate(shared_context)
+        shared_gate = self.shared_gate(shared_context) * density_gate
 
         proposal_boxes = batch_dict.get('tta_proposal_boxes', None)
         proposal_mask = batch_dict.get('tta_proposal_mask', None)
@@ -273,4 +294,9 @@ class BEVFusionTTAAdapter(nn.Module):
             shared_gate * shared_residual + proposal_residual
         )
         batch_dict['tta_adapter_gate_mean'] = shared_gate.detach().mean()
+        batch_dict['tta_adapter_density_mean'] = density_mean
+        batch_dict['tta_adapter_density_nonzero'] = density_nonzero
+        batch_dict['tta_adapter_residual_mean'] = (
+            shared_residual.detach().abs().mean() + proposal_residual.detach().abs().mean()
+        )
         return batch_dict

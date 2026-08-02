@@ -14,13 +14,39 @@ from pcdet.config import cfg
 from pcdet.models import load_data_to_gpu, build_network
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils, box_utils
-from pcdet.utils.tta_utils import TTA_augmentation
+from pcdet.utils.tta_utils import TTA_augmentation, build_tta_density_map
 from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
+from pcdet.tta_methods.reliability import apply_sparse_point_perturbation, compute_spcra_reliability
 
 # Global Cache (Module Level)
 PSEUDO_LABELS = {}
 NEW_PSEUDO_LABELS = {}
 GEOMETRY_FILTER_STATS = {}
+RG_PLM_STATS = {}
+
+
+def _new_spcra_stats(enabled):
+    return {
+        'enabled': 1.0 if enabled else 0.0,
+        'clean_boxes': 0.0,
+        'perturbed_boxes': 0.0,
+        'matched_boxes': 0.0,
+        'match_rate': 0.0,
+        'reliability_mean': 1.0,
+        'reliability_min': 1.0,
+    }
+
+
+def _new_rg_plm_stats(enabled):
+    return {
+        'enabled': 1.0 if enabled else 0.0,
+        'boxes_before': 0.0,
+        'boxes_after': 0.0,
+        'boxes_filtered': 0.0,
+        'reliability_mean': 1.0,
+        'score_scale_mean': 1.0,
+    }
+
 
 class MOS(object):
     def __init__(self, model, tta_cfg, logger, dataset=None): # 添加 dataset 参数
@@ -56,6 +82,8 @@ class MOS(object):
         self.fallback_dim = 256
         self.dpo_cost_history = []
         self.dpo_matcher_stats = {}
+        self.spcra_stats = _new_spcra_stats(False)
+        self.rg_plm_stats = _new_rg_plm_stats(False)
         
         # Initialize a temporary model shell for feature extraction (shared weights)
         # We only need the structure, weights will be loaded dynamically
@@ -98,6 +126,8 @@ class MOS(object):
         else:
             self.total_samples_seen += b_size
 
+        self._prepare_sg_dfa_density_map(batch_dict)
+
         # 诊断：记录注入伪标签前的 GT 类别分布（若 batch 中存在真实标签）
         gt_hist = self._collect_hist_from_gt_boxes(batch_dict.get('gt_boxes', None))
         
@@ -109,12 +139,18 @@ class MOS(object):
         self.model.eval()
         with torch.no_grad():
             pred_dicts, _ = self.model(batch_dict)
+
+        work_pred_dicts = pred_dicts
+        self.spcra_stats = _new_spcra_stats(self._spcra_enabled())
+        if self._spcra_enabled():
+            work_pred_dicts, self.spcra_stats = self._run_spcra_diagnostic(batch_dict, pred_dicts)
         
         # Save raw pseudo labels（A8: 恢复与原版 MOS 一致的 memory-ensemble 语义）
         need_update = self._should_memory_update()
         save_pseudo_label_batch(
-            batch_dict, pred_dicts, need_update=need_update
+            batch_dict, work_pred_dicts, need_update=need_update
         )
+        self.rg_plm_stats = _get_rg_plm_stats()
 
         # 3. MOS Aggregation Logic (The Core)
         # Check if we have enough checkpoints to perform synergy
@@ -147,9 +183,12 @@ class MOS(object):
             with torch.no_grad():
                 # Inference again with aggregated model
                 p_dicts, _ = super_model(batch_dict)
+                if self._spcra_enabled():
+                    p_dicts, self.spcra_stats = self._run_spcra_diagnostic(batch_dict, p_dicts, super_model)
                 save_pseudo_label_batch(
                     batch_dict, p_dicts, need_update=need_update
                 )
+                self.rg_plm_stats = _get_rg_plm_stats()
             del super_model
 
         self.dpo_matcher_stats = {}
@@ -243,6 +282,9 @@ class MOS(object):
             tb_dict['tail_ps/traffic_cone'] = float(pseudo_hist.get('traffic_cone', 0))
             _add_geometry_filter_stats_to_logs(geometry_filter_stats, tb_dict, disp_dict)
             self._add_dpo_matcher_stats_to_logs(tb_dict, disp_dict)
+            self._add_spcra_stats_to_logs(tb_dict, disp_dict)
+            self._add_rg_plm_stats_to_logs(tb_dict, disp_dict)
+            self._add_sg_dfa_stats_to_logs(target_batch, tb_dict, disp_dict)
 
         if self.rank == 0 and (self.total_samples_seen % 50 == 0):
             self.logger.info(
@@ -260,6 +302,120 @@ class MOS(object):
         
         # Return items for logging
         return final_loss.item(), tb_dict, disp_dict
+
+    def _spcra_enabled(self):
+        spcra_cfg = self.tta_cfg.get('SPCRA', None)
+        return bool(spcra_cfg is not None and spcra_cfg.get('ENABLED', False))
+
+    def _sg_dfa_enabled(self):
+        adapter_cfg = cfg.MODEL.get('TTA_FUSION_ADAPTER', None)
+        density_cfg = adapter_cfg.get('SG_DFA', None) if adapter_cfg is not None else None
+        return bool(
+            adapter_cfg is not None
+            and adapter_cfg.get('ENABLED', False)
+            and density_cfg is not None
+            and density_cfg.get('ENABLED', False)
+        )
+
+    def _prepare_sg_dfa_density_map(self, batch_dict):
+        if not self._sg_dfa_enabled():
+            return
+
+        adapter_cfg = cfg.MODEL.get('TTA_FUSION_ADAPTER', None)
+        density_cfg = adapter_cfg.get('SG_DFA', {})
+        point_cloud_range = getattr(self.dataset, 'point_cloud_range', None)
+        if point_cloud_range is None:
+            point_cloud_range = cfg.DATA_CONFIG.get('POINT_CLOUD_RANGE', None)
+        batch_dict['tta_density_map'] = build_tta_density_map(
+            batch_dict['points'],
+            int(batch_dict.get('batch_size', 1)),
+            point_cloud_range,
+            density_cfg.get('GRID_SIZE', 32),
+        )
+
+    def _run_spcra_diagnostic(self, batch_dict, clean_pred_dicts, diagnostic_model=None):
+        spcra_cfg = self.tta_cfg.get('SPCRA', {})
+        disturbed_batch = copy.deepcopy(batch_dict)
+        apply_sparse_point_perturbation(
+            disturbed_batch,
+            spcra_cfg.get('DROP_RATE', 0.10),
+        )
+        disturbed_batch = TTA_augmentation(
+            self.dataset,
+            disturbed_batch,
+            strength=str(spcra_cfg.get('TTA_STRENGTH', 'mid')).lower(),
+        )
+        self._prepare_sg_dfa_density_map(disturbed_batch)
+
+        model = self.model if diagnostic_model is None else diagnostic_model
+        was_training = model.training
+        model.eval()
+        with torch.no_grad():
+            perturbed_pred_dicts, _ = model(disturbed_batch)
+        if was_training:
+            model.train()
+
+        sidecars, stats = compute_spcra_reliability(
+            clean_pred_dicts,
+            perturbed_pred_dicts,
+            max_center_distance=spcra_cfg.get('MAX_CENTER_DISTANCE', 1.0),
+            reliability_floor=spcra_cfg.get('RELIABILITY_FLOOR', 0.05),
+        )
+        stats['enabled'] = 1.0
+        work_pred_dicts = []
+        for pred_dict, reliability in zip(clean_pred_dicts, sidecars):
+            enriched_pred = dict(pred_dict)
+            enriched_pred['spcra_reliability'] = reliability
+            work_pred_dicts.append(enriched_pred)
+
+        log_interval = int(spcra_cfg.get('LOG_INTERVAL', 50))
+        if self.rank == 0 and log_interval > 0 and self.total_samples_seen % log_interval == 0:
+            self.logger.info(
+                '[MM-MOS][SPCRA] samples_seen=%d | clean=%d | perturbed=%d | matched=%d | '
+                'match_rate=%.3f | reliability=%.3f',
+                self.total_samples_seen,
+                int(stats['clean_boxes']),
+                int(stats['perturbed_boxes']),
+                int(stats['matched_boxes']),
+                float(stats['match_rate']),
+                float(stats['reliability_mean']),
+            )
+        return work_pred_dicts, stats
+
+    @staticmethod
+    def _tensor_scalar(value, default=0.0):
+        if torch.is_tensor(value) and value.numel() > 0:
+            return float(value.detach().float().mean().item())
+        if value is None:
+            return float(default)
+        return float(value)
+
+    def _add_spcra_stats_to_logs(self, tb_dict, disp_dict):
+        stats = self.spcra_stats
+        for key in ['enabled', 'clean_boxes', 'perturbed_boxes', 'matched_boxes', 'match_rate', 'reliability_mean', 'reliability_min']:
+            tb_dict['spcra/%s' % key] = float(stats.get(key, 0.0))
+        disp_dict['spcra_rel'] = '%.2f' % float(stats.get('reliability_mean', 1.0))
+
+    def _add_rg_plm_stats_to_logs(self, tb_dict, disp_dict):
+        stats = self.rg_plm_stats
+        for key in ['enabled', 'boxes_before', 'boxes_after', 'boxes_filtered', 'reliability_mean', 'score_scale_mean']:
+            tb_dict['rg_plm/%s' % key] = float(stats.get(key, 0.0))
+        disp_dict['rg_plm_keep'] = '%.2f' % (
+            float(stats.get('boxes_after', 0.0)) / max(float(stats.get('boxes_before', 0.0)), 1.0)
+        )
+
+    def _add_sg_dfa_stats_to_logs(self, batch_dict, tb_dict, disp_dict):
+        enabled = 1.0 if self._sg_dfa_enabled() else 0.0
+        density_mean = self._tensor_scalar(batch_dict.get('tta_adapter_density_mean', None))
+        density_nonzero = self._tensor_scalar(batch_dict.get('tta_adapter_density_nonzero', None))
+        gate_mean = self._tensor_scalar(batch_dict.get('tta_adapter_gate_mean', None))
+        residual_mean = self._tensor_scalar(batch_dict.get('tta_adapter_residual_mean', None))
+        tb_dict['sg_dfa/enabled'] = enabled
+        tb_dict['sg_dfa/density_mean'] = density_mean
+        tb_dict['sg_dfa/density_nonzero'] = density_nonzero
+        tb_dict['sg_dfa/gate_mean'] = gate_mean
+        tb_dict['sg_dfa/residual_mean'] = residual_mean
+        disp_dict['sg_dfa'] = '%.2f/%.2f' % (density_mean, gate_mean)
 
     def _dpo_matcher_enabled(self):
         dpo_cfg = self.tta_cfg.get('DPO_MATCHER', None)
@@ -929,13 +1085,66 @@ def _slice_gt_infos(gt_infos, keep_mask):
     if gt_boxes is None:
         return gt_infos
 
-    keep_mask = np.asarray(keep_mask, dtype=bool)
-    return {
+    keep_mask = np.asarray(keep_mask)
+    filtered_infos = {
         'gt_boxes': gt_boxes[keep_mask],
         'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
         'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
         'memory_counter': gt_infos.get('memory_counter', np.zeros(gt_boxes.shape[0]))[keep_mask]
     }
+    if gt_infos.get('reliability_weights', None) is not None:
+        filtered_infos['reliability_weights'] = gt_infos['reliability_weights'][keep_mask]
+    return filtered_infos
+
+
+def _apply_rg_plm(gt_infos):
+    global RG_PLM_STATS
+    rg_cfg = cfg.SELF_TRAIN.get('RG_PLM', None)
+    if rg_cfg is None or not rg_cfg.get('ENABLED', False):
+        return gt_infos
+
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    if gt_boxes is None or len(gt_boxes) == 0:
+        return gt_infos
+
+    reliability = gt_infos.get('reliability_weights', None)
+    if reliability is None or len(reliability) != gt_boxes.shape[0]:
+        reliability = np.ones(gt_boxes.shape[0], dtype=np.float32)
+    reliability = np.clip(np.asarray(reliability, dtype=np.float32), 0.0, 1.0)
+    mode = str(rg_cfg.get('MODE', 'reweight')).lower()
+    min_reliability = float(rg_cfg.get('MIN_RELIABILITY', 0.35))
+    score_blend = float(np.clip(rg_cfg.get('SCORE_BLEND', 0.5), 0.0, 1.0))
+    before = int(gt_boxes.shape[0])
+    keep_mask = reliability >= min_reliability if mode == 'filter' else np.ones(before, dtype=bool)
+
+    filtered_infos = _slice_gt_infos(gt_infos, keep_mask)
+    filtered_reliability = reliability[keep_mask]
+    if mode == 'reweight' and filtered_infos['gt_boxes'].shape[0] > 0:
+        filtered_boxes = filtered_infos['gt_boxes'].copy()
+        filtered_boxes[:, 8] *= (1.0 - score_blend) + score_blend * filtered_reliability
+        filtered_infos['gt_boxes'] = filtered_boxes
+
+    RG_PLM_STATS['enabled'] = 1.0
+    RG_PLM_STATS['boxes_before'] += float(before)
+    RG_PLM_STATS['boxes_after'] += float(filtered_infos['gt_boxes'].shape[0])
+    RG_PLM_STATS['boxes_filtered'] += float(before - filtered_infos['gt_boxes'].shape[0])
+    if filtered_reliability.size > 0:
+        RG_PLM_STATS['reliability_sum'] += float(filtered_reliability.sum())
+        RG_PLM_STATS['score_scale_sum'] += float(
+            ((1.0 - score_blend) + score_blend * filtered_reliability).sum()
+        )
+    return filtered_infos
+
+
+def _get_rg_plm_stats():
+    stats = copy.deepcopy(RG_PLM_STATS)
+    count = float(stats.get('boxes_after', 0.0))
+    if count > 0.0:
+        stats['reliability_mean'] = float(stats.get('reliability_sum', 0.0)) / count
+        stats['score_scale_mean'] = float(stats.get('score_scale_sum', 0.0)) / count
+    stats.pop('reliability_sum', None)
+    stats.pop('score_scale_sum', None)
+    return stats
 
 
 def _apply_dpo_hungarian_filter(gt_infos, disturbed_pred_dict, dpo_cfg, cost_history):
@@ -1090,7 +1299,9 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
     1) 先按阈值生成当前 batch 伪标签
     2) 若启用 MEMORY_ENSEMBLE 且 need_update=True，则与历史伪标签融合
     """
-    global NEW_PSEUDO_LABELS, PSEUDO_LABELS
+    global NEW_PSEUDO_LABELS, PSEUDO_LABELS, RG_PLM_STATS
+    rg_cfg = cfg.SELF_TRAIN.get('RG_PLM', None)
+    RG_PLM_STATS = _new_rg_plm_stats(bool(rg_cfg is not None and rg_cfg.get('ENABLED', False)))
     _reset_geometry_filter_stats()
     _update_raw_geometry_filter_stats(input_dict, pred_dicts)
 
@@ -1125,6 +1336,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             NEW_PSEUDO_LABELS[fid] = _apply_class_topk_filter(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_adaptive_noisy_class_cap(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_nan_box_filter(NEW_PSEUDO_LABELS[fid])
+            NEW_PSEUDO_LABELS[fid] = _apply_rg_plm(NEW_PSEUDO_LABELS[fid])
 
     mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', None)
     if mem_cfg is None or not bool(mem_cfg.get('ENABLED', False) and need_update):
@@ -1198,23 +1410,11 @@ def _apply_class_topk_filter(gt_infos):
             keep_indices.append(cls_inds[top_local])
 
     if len(keep_indices) == 0:
-        empty_infos = {
-            'gt_boxes': gt_boxes[:0],
-            'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][:0],
-            'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][:0],
-            'memory_counter': gt_infos['memory_counter'][:0]
-        }
-        return empty_infos
+        return _slice_gt_infos(gt_infos, np.zeros(gt_boxes.shape[0], dtype=bool))
 
     keep_indices = np.concatenate(keep_indices, axis=0)
 
-    filtered_infos = {
-        'gt_boxes': gt_boxes[keep_indices],
-        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_indices],
-        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_indices],
-        'memory_counter': gt_infos['memory_counter'][keep_indices]
-    }
-    return filtered_infos
+    return _slice_gt_infos(gt_infos, keep_indices)
 
 
 def _apply_depth_uncertainty_filter(gt_infos, batch_dict, batch_index):
@@ -1314,13 +1514,7 @@ def _apply_depth_uncertainty_filter(gt_infos, batch_dict, batch_index):
     if keep_mask.all():
         return gt_infos
 
-    filtered_infos = {
-        'gt_boxes': gt_boxes[keep_mask],
-        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
-        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
-        'memory_counter': gt_infos['memory_counter'][keep_mask]
-    }
-    return filtered_infos
+    return _slice_gt_infos(gt_infos, keep_mask)
 
 
 def _apply_depth_entropy_filter(gt_infos, batch_dict, batch_index):
@@ -1423,13 +1617,7 @@ def _apply_depth_entropy_filter(gt_infos, batch_dict, batch_index):
     if keep_mask.all():
         return gt_infos
 
-    filtered_infos = {
-        'gt_boxes': gt_boxes[keep_mask],
-        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
-        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
-        'memory_counter': gt_infos['memory_counter'][keep_mask]
-    }
-    return filtered_infos
+    return _slice_gt_infos(gt_infos, keep_mask)
 
 
 def _apply_multimodal_conflict_filter(gt_infos, batch_dict, batch_index):
@@ -1582,13 +1770,7 @@ def _apply_multimodal_conflict_filter(gt_infos, batch_dict, batch_index):
     if keep_mask.all():
         return gt_infos
 
-    filtered_infos = {
-        'gt_boxes': gt_boxes[keep_mask],
-        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_mask],
-        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_mask],
-        'memory_counter': gt_infos['memory_counter'][keep_mask]
-    }
-    return filtered_infos
+    return _slice_gt_infos(gt_infos, keep_mask)
 
 
 def _class_cfg_value(class_cfg, cls_name, default_value):
@@ -2076,13 +2258,7 @@ def _apply_nan_box_filter(gt_infos):
     if finite_mask.all():
         return gt_infos
 
-    filtered_infos = {
-        'gt_boxes': gt_boxes[finite_mask],
-        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][finite_mask],
-        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][finite_mask],
-        'memory_counter': gt_infos['memory_counter'][finite_mask]
-    }
-    return filtered_infos
+    return _slice_gt_infos(gt_infos, finite_mask)
 
 
 def _apply_adaptive_noisy_class_cap(gt_infos):
@@ -2141,19 +2317,7 @@ def _apply_adaptive_noisy_class_cap(gt_infos):
         keep_parts.append(cls_inds[top_local])
 
     if len(keep_parts) == 0:
-        empty_infos = {
-            'gt_boxes': gt_boxes[:0],
-            'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][:0],
-            'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][:0],
-            'memory_counter': gt_infos['memory_counter'][:0]
-        }
-        return empty_infos
+        return _slice_gt_infos(gt_infos, np.zeros(gt_boxes.shape[0], dtype=bool))
 
     keep_indices = np.concatenate(keep_parts, axis=0)
-    filtered_infos = {
-        'gt_boxes': gt_boxes[keep_indices],
-        'cls_scores': None if gt_infos.get('cls_scores', None) is None else gt_infos['cls_scores'][keep_indices],
-        'iou_scores': None if gt_infos.get('iou_scores', None) is None else gt_infos['iou_scores'][keep_indices],
-        'memory_counter': gt_infos['memory_counter'][keep_indices]
-    }
-    return filtered_infos
+    return _slice_gt_infos(gt_infos, keep_indices)

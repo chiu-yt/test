@@ -13,6 +13,40 @@ except ImportError:
     pass
 
 
+def build_tta_density_map(points, batch_size, point_cloud_range, grid_size=32):
+    """Build a normalized coarse BEV point-density map for SG-DFA."""
+    if torch.is_tensor(points):
+        points_tensor = points
+    else:
+        points_tensor = torch.as_tensor(points, dtype=torch.float32)
+
+    size = max(int(grid_size), 1)
+    density = points_tensor.new_zeros((int(batch_size), size * size))
+    if points_tensor.numel() == 0:
+        return density.view(int(batch_size), 1, size, size)
+
+    point_range = points_tensor.new_tensor(point_cloud_range).view(-1)
+    x_min, y_min, _, x_max, y_max, _ = point_range[:6]
+    x_norm = (points_tensor[:, 1] - x_min) / (x_max - x_min).clamp_min(1e-6)
+    y_norm = (points_tensor[:, 2] - y_min) / (y_max - y_min).clamp_min(1e-6)
+    x_index = (x_norm * size).long()
+    y_index = (y_norm * size).long()
+    batch_indices = points_tensor[:, 0].long()
+    valid = (
+        (batch_indices >= 0) & (batch_indices < int(batch_size))
+        & (x_index >= 0) & (x_index < size)
+        & (y_index >= 0) & (y_index < size)
+    )
+    if not bool(valid.any()):
+        return density.view(int(batch_size), 1, size, size)
+
+    flat_indices = batch_indices[valid] * size * size + y_index[valid] * size + x_index[valid]
+    density.view(-1).scatter_add_(0, flat_indices, density.new_ones(flat_indices.shape[0]))
+    density = torch.log1p(density).view(int(batch_size), 1, size, size)
+    density = density / density.amax(dim=(-2, -1), keepdim=True).clamp_min(1.0)
+    return density
+
+
 def _build_lidar_aug_matrix_from_single_dict(data_dict):
     lidar_aug_matrix = np.eye(4, dtype=np.float32)
 
@@ -317,6 +351,16 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
         target_batch['tta_proposal_boxes'] = proposal_boxes
         target_batch['tta_proposal_mask'] = proposal_mask
 
+    adapter_cfg = cfg.MODEL.get('TTA_FUSION_ADAPTER', None)
+    density_cfg = adapter_cfg.get('SG_DFA', None) if adapter_cfg is not None else None
+    if density_cfg is not None and density_cfg.get('ENABLED', False):
+        target_batch['tta_density_map'] = build_tta_density_map(
+            target_batch['points'],
+            b_size,
+            point_cloud_range,
+            density_cfg.get('GRID_SIZE', 32),
+        )
+
     # 9) 重新生成 Voxel（如果 batch 里存在 voxel keys）
     if 'voxels' in target_batch:
         target_batch.pop('voxels')
@@ -382,8 +426,8 @@ def rotate_points_along_z(points, angle):
         angle: (B), 旋转弧度
     Returns:
     """
-    points, is_numpy = check_numpy_to_torch(points)
-    angle, _ = check_numpy_to_torch(angle)
+    points, is_numpy = common_utils.check_numpy_to_torch(points)
+    angle, _ = common_utils.check_numpy_to_torch(angle)
 
     cosa = torch.cos(angle)
     sina = torch.sin(angle)

@@ -6,6 +6,26 @@ from pcdet.utils import common_utils
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.models.model_utils.model_nms_utils import class_agnostic_nms
 
+
+def _reliability_weights(gt_infos, size):
+    weights = gt_infos.get('reliability_weights', None)
+    if weights is None or len(weights) != size:
+        return np.ones(size, dtype=np.float32)
+    return np.asarray(weights, dtype=np.float32)
+
+
+def _prediction_reliability(pred_dict, size):
+    weights = pred_dict.get('spcra_reliability', None)
+    if weights is None:
+        return np.ones(size, dtype=np.float32)
+    if torch.is_tensor(weights):
+        weights = weights.detach().cpu().numpy()
+    weights = np.asarray(weights, dtype=np.float32).reshape(-1)
+    if weights.shape[0] != size:
+        return np.ones(size, dtype=np.float32)
+    return np.clip(weights, 0.0, 1.0)
+
+
 def save_pseudo_label_batch(input_dict, pseudo_labels, pred_dicts=None):
     batch_size = len(pred_dicts)
     for b_idx in range(batch_size):
@@ -14,6 +34,7 @@ def save_pseudo_label_batch(input_dict, pseudo_labels, pred_dicts=None):
             pred_boxes = pred_dicts[b_idx]['pred_boxes'].detach().cpu().numpy()
             pred_labels = pred_dicts[b_idx]['pred_labels'].detach().cpu().numpy()
             pred_scores = pred_dicts[b_idx]['pred_scores'].detach().cpu().numpy()
+            reliability_weights = _prediction_reliability(pred_dicts[b_idx], pred_boxes.shape[0])
             
             if 'pred_cls_scores' in pred_dicts[b_idx]:
                 pred_cls_scores = pred_dicts[b_idx]['pred_cls_scores'].detach().cpu().numpy()
@@ -26,6 +47,7 @@ def save_pseudo_label_batch(input_dict, pseudo_labels, pred_dicts=None):
                 pred_labels = pred_labels[remain_mask]
                 pred_scores = pred_scores[remain_mask]
                 pred_boxes = pred_boxes[remain_mask]
+                reliability_weights = reliability_weights[remain_mask]
                 if pred_cls_scores is not None:
                     pred_cls_scores = pred_cls_scores[remain_mask]
                 if pred_iou_scores is not None:
@@ -40,12 +62,14 @@ def save_pseudo_label_batch(input_dict, pseudo_labels, pred_dicts=None):
                                      pred_scores.reshape(-1, 1)), axis=1)
         else:
             gt_box = np.zeros((0, 9), dtype=np.float32)
+            reliability_weights = np.zeros((0,), dtype=np.float32)
 
         gt_infos = {
             'gt_boxes': gt_box,
             'cls_scores': pred_cls_scores,
             'iou_scores': pred_iou_scores,
-            'memory_counter': np.zeros(gt_box.shape[0])
+            'memory_counter': np.zeros(gt_box.shape[0]),
+            'reliability_weights': reliability_weights
         }
 
         if 'frame_id' in input_dict:
@@ -62,6 +86,8 @@ def consistency_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
     new_cls_scores = gt_infos_a['cls_scores']
     new_iou_scores = gt_infos_a['iou_scores']
     new_memory_counter = gt_infos_a['memory_counter']
+    new_reliability = _reliability_weights(gt_infos_a, gt_box_a.shape[0])
+    reliability_b = _reliability_weights(gt_infos_b, gt_box_b.shape[0])
     if gt_box_b.shape[0] == 0:
         gt_infos_a['memory_counter'] += 1
         return gt_infos_a
@@ -90,6 +116,11 @@ def consistency_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
         new_cls_scores[matching_selected[score_mask, 0]] = gt_infos_b['cls_scores'][matching_selected[score_mask, 1]]
     if gt_infos_a['iou_scores'] is not None:
         new_iou_scores[matching_selected[score_mask, 0]] = gt_infos_b['iou_scores'][matching_selected[score_mask, 1]]
+    if matching_selected.shape[0] > 0:
+        new_reliability[matching_selected[:, 0]] = np.maximum(
+            new_reliability[matching_selected[:, 0]],
+            reliability_b[matching_selected[:, 1]],
+        )
     new_memory_counter[matching_selected[:, 0]] = 0
     disappear_idx = (ious < memory_ensemble_cfg.IOU_THRESH).nonzero()[0]
     if memory_ensemble_cfg.get('MEMORY_VOTING', None) and memory_ensemble_cfg.MEMORY_VOTING.ENABLED:
@@ -103,6 +134,7 @@ def consistency_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
             new_cls_scores = new_cls_scores[remain_mask]
         if gt_infos_a['iou_scores'] is not None:
             new_iou_scores = new_iou_scores[remain_mask]
+        new_reliability = new_reliability[remain_mask]
     ious_b2a, match_idx_b2a = torch.max(iou_matrix, dim=0)
     ious_b2a, match_idx_b2a = ious_b2a.numpy(), match_idx_b2a.numpy()
     newboxes_idx = (ious_b2a < memory_ensemble_cfg.IOU_THRESH).nonzero()[0]
@@ -113,7 +145,14 @@ def consistency_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
         if gt_infos_a['iou_scores'] is not None:
             new_iou_scores = np.concatenate((new_iou_scores, gt_infos_b['iou_scores'][newboxes_idx]), axis=0)
         new_memory_counter = np.concatenate((new_memory_counter, gt_infos_b['memory_counter'][newboxes_idx]), axis=0)
-    new_gt_infos = {'gt_boxes': new_gt_box, 'cls_scores': new_cls_scores, 'iou_scores': new_iou_scores, 'memory_counter': new_memory_counter}
+        new_reliability = np.concatenate((new_reliability, reliability_b[newboxes_idx]), axis=0)
+    new_gt_infos = {
+        'gt_boxes': new_gt_box,
+        'cls_scores': new_cls_scores,
+        'iou_scores': new_iou_scores,
+        'memory_counter': new_memory_counter,
+        'reliability_weights': new_reliability,
+    }
     return new_gt_infos
 
 def nms_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
@@ -132,6 +171,10 @@ def nms_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
     if gt_infos_a['iou_scores'] is not None:
         new_iou_scores = np.concatenate((gt_infos_a['iou_scores'], gt_infos_b['iou_scores']), axis=0)
     new_memory_counter = np.concatenate((gt_infos_a['memory_counter'], gt_infos_b['memory_counter']), axis=0)
+    new_reliability = np.concatenate((
+        _reliability_weights(gt_infos_a, gt_box_a.shape[0]),
+        _reliability_weights(gt_infos_b, gt_box_b.shape[0]),
+    ), axis=0)
     selected, selected_scores = class_agnostic_nms(box_scores=gt_boxes[:, -1], box_preds=gt_boxes[:, :7], nms_config=memory_ensemble_cfg.NMS_CONFIG)
     gt_boxes = gt_boxes.cpu().numpy()
     if isinstance(selected, list):
@@ -154,7 +197,13 @@ def nms_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
         rm_idx = (new_memory_counter >= memory_ensemble_cfg.MEMORY_VOTING.RM_THRESH).nonzero()[0]
         selected = np.setdiff1d(selected, rm_idx)
     selected_gt_boxes = gt_boxes[selected]
-    new_gt_infos = {'gt_boxes': selected_gt_boxes, 'cls_scores': new_cls_scores[selected] if gt_infos_a['cls_scores'] is not None else None, 'iou_scores': new_iou_scores[selected] if gt_infos_a['iou_scores'] is not None else None, 'memory_counter': new_memory_counter[selected]}
+    new_gt_infos = {
+        'gt_boxes': selected_gt_boxes,
+        'cls_scores': new_cls_scores[selected] if gt_infos_a['cls_scores'] is not None else None,
+        'iou_scores': new_iou_scores[selected] if gt_infos_a['iou_scores'] is not None else None,
+        'memory_counter': new_memory_counter[selected],
+        'reliability_weights': new_reliability[selected],
+    }
     return new_gt_infos
 
 def bipartite_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
@@ -165,6 +214,8 @@ def bipartite_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
     new_cls_scores = gt_infos_a['cls_scores']
     new_iou_scores = gt_infos_a['iou_scores']
     new_memory_counter = gt_infos_a['memory_counter']
+    new_reliability = _reliability_weights(gt_infos_a, gt_box_a.shape[0])
+    reliability_b = _reliability_weights(gt_infos_b, gt_box_b.shape[0])
     if gt_box_b.shape[0] == 0:
         gt_infos_a['memory_counter'] += 1
         return gt_infos_a
@@ -186,6 +237,11 @@ def bipartite_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
         new_cls_scores[matching_selected[score_mask, 0]] = gt_infos_b['cls_scores'][matching_selected[score_mask, 1]]
     if gt_infos_a['iou_scores'] is not None:
         new_iou_scores[matching_selected[score_mask, 0]] = gt_infos_b['iou_scores'][matching_selected[score_mask, 1]]
+    if matching_selected.shape[0] > 0:
+        new_reliability[matching_selected[:, 0]] = np.maximum(
+            new_reliability[matching_selected[:, 0]],
+            reliability_b[matching_selected[:, 1]],
+        )
     new_memory_counter[matching_selected[:, 0]] = 0
     gt_box_a_idx = np.array(list(range(gt_box_a.shape[0])))
     disappear_idx = np.setdiff1d(gt_box_a_idx, matching_selected[:, 0])
@@ -200,6 +256,7 @@ def bipartite_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
             new_cls_scores = new_cls_scores[remain_mask]
         if gt_infos_a['iou_scores'] is not None:
             new_iou_scores = new_iou_scores[remain_mask]
+        new_reliability = new_reliability[remain_mask]
     gt_box_b_idx = np.array(list(range(gt_box_b.shape[0])))
     newboxes_idx = np.setdiff1d(gt_box_b_idx, matching_selected[:, 1])
     if newboxes_idx.shape[0] != 0:
@@ -209,10 +266,21 @@ def bipartite_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg):
         if gt_infos_a['iou_scores'] is not None:
             new_iou_scores = np.concatenate((new_iou_scores, gt_infos_b['iou_scores'][newboxes_idx]), axis=0)
         new_memory_counter = np.concatenate((new_memory_counter, gt_infos_b['memory_counter'][newboxes_idx]), axis=0)
-    new_gt_infos = {'gt_boxes': new_gt_box, 'cls_scores': new_cls_scores, 'iou_scores': new_iou_scores, 'memory_counter': new_memory_counter}
+        new_reliability = np.concatenate((new_reliability, reliability_b[newboxes_idx]), axis=0)
+    new_gt_infos = {
+        'gt_boxes': new_gt_box,
+        'cls_scores': new_cls_scores,
+        'iou_scores': new_iou_scores,
+        'memory_counter': new_memory_counter,
+        'reliability_weights': new_reliability,
+    }
     return new_gt_infos
 
 def memory_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg, ensemble_func):
+    gt_infos_a = dict(gt_infos_a)
+    gt_infos_b = dict(gt_infos_b)
+    gt_infos_a['reliability_weights'] = _reliability_weights(gt_infos_a, gt_infos_a['gt_boxes'].shape[0])
+    gt_infos_b['reliability_weights'] = _reliability_weights(gt_infos_b, gt_infos_b['gt_boxes'].shape[0])
     classes_a = np.unique(np.abs(gt_infos_a['gt_boxes'][:, -2]))
     classes_b = np.unique(np.abs(gt_infos_b['gt_boxes'][:, -2]))
     n_classes = max(classes_a.shape[0], classes_b.shape[0])

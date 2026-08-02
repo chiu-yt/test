@@ -147,6 +147,9 @@ MODEL:
         ROUTER_MODE: shared_plus_class
         POOL_SIZE: 3
         RESIDUAL_SCALE_INIT: 0.0
+        SG_DFA:
+            ENABLED: False
+            GRID_SIZE: 32
 
     FORWARD_ONLY_CONFLICT_ANALYSIS:
         ENABLED: False
@@ -284,6 +287,14 @@ TTA:
         ACCEPT_SCORE: 1.0
         LOG_INTERVAL: 50
 
+    SPCRA:
+        ENABLED: False
+        DROP_RATE: 0.10
+        TTA_STRENGTH: mid
+        MAX_CENTER_DISTANCE: 1.0
+        RELIABILITY_FLOOR: 0.05
+        LOG_INTERVAL: 50
+
 # ================= 自训练参数 =================
 SELF_TRAIN:
     # 方案A（已固化）：S1 最优阈值，仅收紧 traffic_cone；其余类别回到安全版
@@ -398,6 +409,12 @@ SELF_TRAIN:
             ENABLED: True
             IGNORE_THRESH: 1
             RM_THRESH: 3
+
+    RG_PLM:
+        ENABLED: False
+        MODE: reweight
+        MIN_RELIABILITY: 0.35
+        SCORE_BLEND: 0.5
     
     UPDATE_PSEUDO_LABEL: [0]
     UPDATE_PSEUDO_LABEL_INTERVAL: 1
