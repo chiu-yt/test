@@ -70,6 +70,13 @@ def _force_module_eval_and_freeze(module):
     module.train = types.MethodType(_train_keep_eval, module)
 
 
+def _freeze_module_params_keep_train(module):
+    for param in module.parameters():
+        param.requires_grad = False
+
+    module.train()
+
+
 def _unfreeze_module(module):
     for param in module.parameters():
         param.requires_grad = True
@@ -101,7 +108,10 @@ def apply_tta_freeze_strategy(model, cfg, logger):
                 if child_name in [adapter_name, 'module_list'] or cur_module is None:
                     continue
                 param_num = sum(p.numel() for p in cur_module.parameters())
-                _force_module_eval_and_freeze(cur_module)
+                if child_name in ['dense_head', 'point_head', 'roi_head']:
+                    _freeze_module_params_keep_train(cur_module)
+                else:
+                    _force_module_eval_and_freeze(cur_module)
                 frozen_modules.append(child_name)
                 logger.info(f'TTA Freeze: 已冻结 `{child_name}`，参数量={param_num}')
 
