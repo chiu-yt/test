@@ -144,6 +144,7 @@ MODEL:
         MIN_PROPOSAL_SCORE: 0.24
         MIN_ACTIVE_PROPOSALS: 1
         TOPK_PER_CLASS: 8
+        GROUP_NORM_GROUPS: 8
         ROUTER_MODE: shared_plus_class
         POOL_SIZE: 3
         RESIDUAL_SCALE_INIT: 0.0
@@ -291,6 +292,10 @@ TTA:
         ENABLED: False
         DROP_RATE: 0.10
         TTA_STRENGTH: mid
+        TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+        MIN_PROPOSAL_SCORE: 0.24
+        TOPK_PER_CLASS: 8
+        USE_SELF_TRAIN_SCORE_THRESH: True
         MAX_CENTER_DISTANCE: 1.0
         RELIABILITY_FLOOR: 0.05
         LOG_INTERVAL: 50
@@ -415,6 +420,13 @@ SELF_TRAIN:
         MODE: reweight
         MIN_RELIABILITY: 0.35
         SCORE_BLEND: 0.5
+        SCORE_CAP:
+            ENABLED: False
+            TARGET_CLASSES: ['pedestrian', 'traffic_cone']
+            MIN_RELIABILITY: 0.35
+            MAX_SCORE:
+                pedestrian: 0.30
+                traffic_cone: 0.30
     
     UPDATE_PSEUDO_LABEL: [0]
     UPDATE_PSEUDO_LABEL_INTERVAL: 1

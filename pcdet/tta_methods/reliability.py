@@ -63,10 +63,61 @@ def _prediction_valid_mask(boxes, labels, scores):
     return valid
 
 
+def _class_score_thresholds(labels, class_score_thresh):
+    if class_score_thresh is None:
+        return None
+
+    thresholds = np.asarray(class_score_thresh, dtype=np.float32).reshape(-1)
+    if thresholds.size == 0:
+        return None
+
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    valid_labels = np.clip(labels, 1, thresholds.shape[0])
+    return thresholds[valid_labels - 1]
+
+
+def _effective_valid_mask(boxes, labels, scores, target_class_ids, min_proposal_score, class_score_thresh):
+    valid_mask = _prediction_valid_mask(boxes, labels, scores)
+    if boxes.shape[0] == 0:
+        return valid_mask
+
+    target_ids = None if target_class_ids is None else np.asarray(target_class_ids, dtype=np.int64).reshape(-1)
+    if target_ids is not None and target_ids.size > 0:
+        valid_mask &= np.isin(np.abs(np.asarray(labels, dtype=np.int64).reshape(-1)), target_ids)
+
+    valid_mask &= np.asarray(scores, dtype=np.float32).reshape(-1) >= float(min_proposal_score)
+
+    class_thresholds = _class_score_thresholds(labels, class_score_thresh)
+    if class_thresholds is not None:
+        valid_mask &= np.asarray(scores, dtype=np.float32).reshape(-1) >= class_thresholds
+    return valid_mask
+
+
+def _topk_per_class_mask(labels, scores, valid_mask, topk_per_class):
+    if int(topk_per_class) <= 0 or not bool(np.any(valid_mask)):
+        return valid_mask
+
+    labels = np.asarray(labels, dtype=np.int64).reshape(-1)
+    scores = np.asarray(scores, dtype=np.float32).reshape(-1)
+    selected_mask = np.zeros_like(valid_mask, dtype=bool)
+    for class_id in np.unique(np.abs(labels[valid_mask])):
+        class_mask = valid_mask & (np.abs(labels) == int(class_id))
+        class_indices = np.flatnonzero(class_mask)
+        if class_indices.size == 0:
+            continue
+        order = np.argsort(-scores[class_indices])[: int(topk_per_class)]
+        selected_mask[class_indices[order]] = True
+    return selected_mask
+
+
 def compute_spcra_reliability(
     clean_pred_dicts,
     perturbed_pred_dicts,
     perturbed_lidar_aug_matrices=None,
+    target_class_ids=None,
+    min_proposal_score=0.0,
+    topk_per_class=0,
+    class_score_thresh=None,
     max_center_distance=1.0,
     reliability_floor=0.05,
 ):
@@ -75,8 +126,12 @@ def compute_spcra_reliability(
     stats = {
         'clean_boxes': 0,
         'perturbed_boxes': 0,
+        'clean_prefilter_valid_boxes': 0,
+        'perturbed_prefilter_valid_boxes': 0,
         'clean_valid_boxes': 0,
         'perturbed_valid_boxes': 0,
+        'clean_filtered_boxes': 0,
+        'perturbed_filtered_boxes': 0,
         'matched_boxes': 0,
         'reliability_sum': 0.0,
         'reliability_min': 1.0,
@@ -87,8 +142,26 @@ def compute_spcra_reliability(
     for clean_pred, perturbed_pred in zip(clean_pred_dicts, perturbed_pred_dicts):
         clean_boxes, clean_labels, clean_scores, clean_box_tensor = _prediction_arrays(clean_pred)
         perturbed_boxes, perturbed_labels, perturbed_scores, _ = _prediction_arrays(perturbed_pred)
-        clean_valid_mask = _prediction_valid_mask(clean_boxes, clean_labels, clean_scores)
-        perturbed_valid_mask = _prediction_valid_mask(perturbed_boxes, perturbed_labels, perturbed_scores)
+        clean_prefilter_valid_mask = _prediction_valid_mask(clean_boxes, clean_labels, clean_scores)
+        perturbed_prefilter_valid_mask = _prediction_valid_mask(perturbed_boxes, perturbed_labels, perturbed_scores)
+        clean_valid_mask = _effective_valid_mask(
+            clean_boxes,
+            clean_labels,
+            clean_scores,
+            target_class_ids,
+            min_proposal_score,
+            class_score_thresh,
+        )
+        perturbed_valid_mask = _effective_valid_mask(
+            perturbed_boxes,
+            perturbed_labels,
+            perturbed_scores,
+            target_class_ids,
+            min_proposal_score,
+            class_score_thresh,
+        )
+        clean_valid_mask = _topk_per_class_mask(clean_labels, clean_scores, clean_valid_mask, topk_per_class)
+        perturbed_valid_mask = _topk_per_class_mask(perturbed_labels, perturbed_scores, perturbed_valid_mask, topk_per_class)
         if perturbed_lidar_aug_matrices is not None:
             perturbed_index = len(sidecars)
             if perturbed_index < len(perturbed_lidar_aug_matrices):
@@ -103,8 +176,12 @@ def compute_spcra_reliability(
 
         stats['clean_boxes'] += int(clean_boxes.shape[0])
         stats['perturbed_boxes'] += int(perturbed_boxes.shape[0])
+        stats['clean_prefilter_valid_boxes'] += int(clean_prefilter_valid_mask.sum())
+        stats['perturbed_prefilter_valid_boxes'] += int(perturbed_prefilter_valid_mask.sum())
         stats['clean_valid_boxes'] += int(clean_valid_mask.sum())
         stats['perturbed_valid_boxes'] += int(perturbed_valid_mask.sum())
+        stats['clean_filtered_boxes'] += int(clean_prefilter_valid_mask.sum() - clean_valid_mask.sum())
+        stats['perturbed_filtered_boxes'] += int(perturbed_prefilter_valid_mask.sum() - perturbed_valid_mask.sum())
 
         clean_valid_indices = np.where(clean_valid_mask)[0]
         perturbed_valid_indices = np.where(perturbed_valid_mask)[0]

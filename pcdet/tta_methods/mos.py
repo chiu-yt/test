@@ -30,8 +30,12 @@ def _new_spcra_stats(enabled):
         'enabled': 1.0 if enabled else 0.0,
         'clean_boxes': 0.0,
         'perturbed_boxes': 0.0,
+        'clean_prefilter_valid_boxes': 0.0,
+        'perturbed_prefilter_valid_boxes': 0.0,
         'clean_valid_boxes': 0.0,
         'perturbed_valid_boxes': 0.0,
+        'clean_filtered_boxes': 0.0,
+        'perturbed_filtered_boxes': 0.0,
         'matched_boxes': 0.0,
         'match_rate': 0.0,
         'reliability_mean': 1.0,
@@ -45,6 +49,8 @@ def _new_rg_plm_stats(enabled):
         'boxes_before': 0.0,
         'boxes_after': 0.0,
         'boxes_filtered': 0.0,
+        'score_cap_applied': 0.0,
+        'score_cap_boxes': 0.0,
         'reliability_sum': 0.0,
         'score_scale_sum': 0.0,
         'reliability_mean': 1.0,
@@ -339,6 +345,13 @@ class MOS(object):
 
     def _run_spcra_diagnostic(self, batch_dict, clean_pred_dicts, diagnostic_model=None):
         spcra_cfg = self.tta_cfg.get('SPCRA', {})
+        adapter_cfg = cfg.MODEL.get('TTA_FUSION_ADAPTER', None)
+        target_class_names = list(spcra_cfg.get('TARGET_CLASSES', adapter_cfg.get('TARGET_CLASSES', []) if adapter_cfg is not None else []))
+        target_class_ids = [idx + 1 for idx, name in enumerate(cfg.CLASS_NAMES) if name in target_class_names]
+        min_proposal_score = float(spcra_cfg.get('MIN_PROPOSAL_SCORE', adapter_cfg.get('MIN_PROPOSAL_SCORE', 0.0) if adapter_cfg is not None else 0.0))
+        topk_per_class = int(spcra_cfg.get('TOPK_PER_CLASS', adapter_cfg.get('TOPK_PER_CLASS', 0) if adapter_cfg is not None else 0))
+        use_self_train_score_thresh = bool(spcra_cfg.get('USE_SELF_TRAIN_SCORE_THRESH', True))
+        class_score_thresh = cfg.SELF_TRAIN.SCORE_THRESH if use_self_train_score_thresh else None
         disturbed_batch = copy.deepcopy(batch_dict)
         apply_sparse_point_perturbation(
             disturbed_batch,
@@ -363,6 +376,10 @@ class MOS(object):
             clean_pred_dicts,
             perturbed_pred_dicts,
             disturbed_batch.get('lidar_aug_matrix', None),
+            target_class_ids=target_class_ids,
+            min_proposal_score=min_proposal_score,
+            topk_per_class=topk_per_class,
+            class_score_thresh=class_score_thresh,
             max_center_distance=spcra_cfg.get('MAX_CENTER_DISTANCE', 1.0),
             reliability_floor=spcra_cfg.get('RELIABILITY_FLOOR', 0.05),
         )
@@ -376,13 +393,15 @@ class MOS(object):
         log_interval = int(spcra_cfg.get('LOG_INTERVAL', 50))
         if self.rank == 0 and log_interval > 0 and self.total_samples_seen % log_interval == 0:
             self.logger.info(
-                '[MM-MOS][SPCRA] samples_seen=%d | clean=%d/%d | perturbed=%d/%d | matched=%d | '
+                '[MM-MOS][SPCRA] samples_seen=%d | clean_eff=%d/%d pre=%d | pert_eff=%d/%d pre=%d | matched=%d | '
                 'match_rate=%.3f | reliability=%.3f',
                 self.total_samples_seen,
-                int(stats['clean_boxes']),
                 int(stats.get('clean_valid_boxes', 0.0)),
-                int(stats['perturbed_boxes']),
+                int(stats['clean_boxes']),
+                int(stats.get('clean_prefilter_valid_boxes', 0.0)),
                 int(stats.get('perturbed_valid_boxes', 0.0)),
+                int(stats['perturbed_boxes']),
+                int(stats.get('perturbed_prefilter_valid_boxes', 0.0)),
                 int(stats['matched_boxes']),
                 float(stats['match_rate']),
                 float(stats['reliability_mean']),
@@ -400,15 +419,20 @@ class MOS(object):
     def _add_spcra_stats_to_logs(self, tb_dict, disp_dict):
         stats = self.spcra_stats
         for key in [
-            'enabled', 'clean_boxes', 'perturbed_boxes', 'clean_valid_boxes', 'perturbed_valid_boxes',
-            'matched_boxes', 'match_rate', 'reliability_mean', 'reliability_min'
+            'enabled', 'clean_boxes', 'perturbed_boxes', 'clean_prefilter_valid_boxes',
+            'perturbed_prefilter_valid_boxes', 'clean_valid_boxes', 'perturbed_valid_boxes',
+            'clean_filtered_boxes', 'perturbed_filtered_boxes', 'matched_boxes', 'match_rate',
+            'reliability_mean', 'reliability_min'
         ]:
             tb_dict['spcra/%s' % key] = float(stats.get(key, 0.0))
         disp_dict['spcra_rel'] = '%.2f' % float(stats.get('reliability_mean', 1.0))
 
     def _add_rg_plm_stats_to_logs(self, tb_dict, disp_dict):
         stats = self.rg_plm_stats
-        for key in ['enabled', 'boxes_before', 'boxes_after', 'boxes_filtered', 'reliability_mean', 'score_scale_mean']:
+        for key in [
+            'enabled', 'boxes_before', 'boxes_after', 'boxes_filtered', 'score_cap_applied',
+            'score_cap_boxes', 'reliability_mean', 'score_scale_mean'
+        ]:
             tb_dict['rg_plm/%s' % key] = float(stats.get(key, 0.0))
         disp_dict['rg_plm_keep'] = '%.2f' % (
             float(stats.get('boxes_after', 0.0)) / max(float(stats.get('boxes_before', 0.0)), 1.0)
@@ -1133,6 +1157,26 @@ def _apply_rg_plm(gt_infos):
         filtered_boxes = filtered_infos['gt_boxes'].copy()
         filtered_boxes[:, 8] *= (1.0 - score_blend) + score_blend * filtered_reliability
         filtered_infos['gt_boxes'] = filtered_boxes
+
+    score_cap_cfg = rg_cfg.get('SCORE_CAP', None)
+    if score_cap_cfg is not None and score_cap_cfg.get('ENABLED', False) and filtered_infos['gt_boxes'].shape[0] > 0:
+        target_names = list(score_cap_cfg.get('TARGET_CLASSES', []))
+        target_ids = {idx + 1 for idx, name in enumerate(cfg.CLASS_NAMES) if name in target_names}
+        if len(target_ids) > 0:
+            labels = np.abs(filtered_infos['gt_boxes'][:, 7]).astype(np.int64)
+            cap_mask = np.isin(labels, np.array(sorted(target_ids), dtype=np.int64))
+            if filtered_reliability.shape[0] == filtered_infos['gt_boxes'].shape[0]:
+                cap_mask &= filtered_reliability < float(score_cap_cfg.get('MIN_RELIABILITY', 0.35))
+            max_score_cfg = score_cap_cfg.get('MAX_SCORE', {})
+            cap_scores = np.array(
+                [float(max_score_cfg.get(cfg.CLASS_NAMES[label - 1], np.inf)) if 1 <= label <= len(cfg.CLASS_NAMES) else np.inf for label in labels],
+                dtype=np.float32,
+            )
+            cap_mask &= np.isfinite(cap_scores)
+            if bool(np.any(cap_mask)):
+                filtered_infos['gt_boxes'][cap_mask, 8] = np.minimum(filtered_infos['gt_boxes'][cap_mask, 8], cap_scores[cap_mask])
+                RG_PLM_STATS['score_cap_applied'] += 1.0
+                RG_PLM_STATS['score_cap_boxes'] += float(cap_mask.sum())
 
     RG_PLM_STATS['enabled'] = 1.0
     RG_PLM_STATS['boxes_before'] += float(before)

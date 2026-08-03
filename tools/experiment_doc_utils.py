@@ -13,7 +13,11 @@ REGISTRY_PATH = 'experiment_registry.json'
 def add_experiment_doc_args(parser):
     parser.add_argument(
         '--disable_doc_autoupdate', action='store_true',
-        help='disable automatic updates to Experiment Record.md and AGENTS.md'
+        help='deprecated no-op; markdown auto-update is disabled unless --enable_doc_autoupdate is set'
+    )
+    parser.add_argument(
+        '--enable_doc_autoupdate', action='store_true',
+        help='enable automatic updates to Experiment Record.md and AGENTS.md'
     )
     parser.add_argument(
         '--exp_name', type=str, default=None,
@@ -390,9 +394,9 @@ def _render_agents_body(records):
 
 def maybe_update_experiment_docs(args, cfg, eval_output_dir, logger=None, output_dir=None,
                                  best_summary=None, single_eval_metrics=None, source='tools/test.py'):
-    if getattr(args, 'disable_doc_autoupdate', False):
+    if not getattr(args, 'enable_doc_autoupdate', False):
         if logger is not None:
-            logger.info('Experiment Doc Update: disabled by --disable_doc_autoupdate')
+            logger.info('Experiment Doc Update: disabled; pass --enable_doc_autoupdate to sync markdown')
         return None
 
     if getattr(cfg, 'LOCAL_RANK', 0) != 0:

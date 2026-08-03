@@ -21,6 +21,7 @@ class BEVFusionTTAAdapter(nn.Module):
         self.topk_per_class = int(model_cfg.get('TOPK_PER_CLASS', 0))
         self.router_mode = str(model_cfg.get('ROUTER_MODE', 'shared_plus_class')).lower()
         self.pool_size = int(model_cfg.get('POOL_SIZE', 3))
+        self.group_norm_groups = self._pick_group_norm_groups(int(model_cfg.get('GROUP_NORM_GROUPS', 8)), hidden_channels)
         density_cfg = model_cfg.get('SG_DFA', None)
         self.sg_dfa_enabled = bool(density_cfg is not None and density_cfg.get('ENABLED', False))
 
@@ -32,13 +33,13 @@ class BEVFusionTTAAdapter(nn.Module):
 
         self.shared_refine = nn.Sequential(
             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_channels),
+            nn.GroupNorm(self.group_norm_groups, hidden_channels),
             nn.ReLU(True),
             nn.Conv2d(hidden_channels, channels, kernel_size=1, bias=True),
         )
         self.shared_gate = nn.Sequential(
             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(hidden_channels),
+            nn.GroupNorm(self.group_norm_groups, hidden_channels),
             nn.ReLU(True),
             nn.Conv2d(hidden_channels, channels, kernel_size=1, bias=True),
             nn.Sigmoid(),
@@ -92,17 +93,25 @@ class BEVFusionTTAAdapter(nn.Module):
 
     def _init_identity(self):
         for module in [self.shared_refine, self.shared_gate, self.proposal_geom_proj, self.proposal_shared_head, self.proposal_router]:
-            self._zero_last_linear(module)
+            self._zero_last_affine(module)
         for module in self.class_shared_heads.values():
-            self._zero_last_linear(module)
+            self._zero_last_affine(module)
         for module in self.class_gate_heads.values():
-            self._zero_last_linear(module)
+            self._zero_last_affine(module)
 
     @staticmethod
-    def _zero_last_linear(module):
+    def _pick_group_norm_groups(requested_groups, channels):
+        max_groups = max(1, min(int(requested_groups), int(channels)))
+        for groups in range(max_groups, 0, -1):
+            if channels % groups == 0:
+                return groups
+        return 1
+
+    @staticmethod
+    def _zero_last_affine(module):
         if isinstance(module, nn.Sequential):
             for submodule in reversed(list(module)):
-                if isinstance(submodule, nn.Linear):
+                if isinstance(submodule, (nn.Linear, nn.Conv2d)):
                     nn.init.zeros_(submodule.weight)
                     nn.init.zeros_(submodule.bias)
                     break

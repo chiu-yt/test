@@ -104,7 +104,9 @@ DPO 代码位于 `/home/zyt/code/DPO-main`，官方实现基于旧 OpenPCDet/ST3
 - `pcdet/utils/tta_utils.py`: `rotate_points_along_z()` 改为使用 `common_utils.check_numpy_to_torch()`，修复裸 `check_numpy_to_torch` 引用；
 - `pcdet/tta_methods/mos.py`: `_new_rg_plm_stats()` 补齐 `reliability_sum` 与 `score_scale_sum`，修复 `RG_PLM` 首次累加 `KeyError`；
 - `pcdet/utils/tta_utils.py` / `pcdet/tta_methods/reliability.py`: SPCRA 现在会把扰动预测通过 `lidar_aug_matrix` 逆变换回 clean frame，再在有效 box 上做匹配；无有效匹配时该框可靠性记为 0，而不是继续沿用 floor 值；
-- `pcdet/tta_methods/mos.py`: SPCRA 日志补充 `clean_valid_boxes` / `perturbed_valid_boxes`，`match_rate` 改为按有效框数计算，避免固定 200 proposal 分母掩盖真实匹配率；
+- `pcdet/tta_methods/mos.py`: SPCRA 日志补充 `clean_prefilter_valid_boxes` / `perturbed_prefilter_valid_boxes` / `clean_filtered_boxes` / `perturbed_filtered_boxes`，`match_rate` 改为按有效框数计算，避免固定 200 proposal 分母掩盖真实匹配率；
+- `pcdet/models/backbones_2d/fuser/tta_fusion_adapter.py`: shared residual / gate 路径改为 `GroupNorm`，并将 shared / proposal / class 分支的最后 affine 层做严格零初始化；
+- `pcdet/tta_methods/mos.py` / `tools/cfgs/nuscenes_models/bevfusion_mos.yaml`: `RG_PLM.SCORE_CAP` 已落位但默认关闭，`SPCRA` 也新增了 target-class / min-score / top-k / score-threshold 过滤键；
 - `tools/train.py`: `ADAPTER_ONLY=True` 时检测头只冻结参数但保持 `train()`，避免 `dense_head.eval()` 导致 `batch_dict['loss']` 缺失；
 - `pcdet/utils/tta_utils.py`: `tta_proposal_boxes` 在 batch 合并前统一归一化为 9 列，修复 9/11 列 proposal 混合导致的 shape mismatch；
 - `tools/scripts/torch_train.sh`: 从裸 `torchrun` 改为 `${PYTHON_BIN:-python} -m torch.distributed.run`，降低 PATH 依赖。
