@@ -93,7 +93,18 @@ def _effective_valid_mask(boxes, labels, scores, target_class_ids, min_proposal_
     return valid_mask
 
 
-def _staged_filter_masks(boxes, labels, scores, target_class_ids, min_proposal_score, class_score_thresh):
+def _staged_filter_masks(
+    boxes,
+    labels,
+    scores,
+    target_class_ids,
+    min_proposal_score,
+    class_score_thresh,
+    camera_support=None,
+    camera_rescue_enabled=False,
+    camera_low_score=0.05,
+    camera_thresh=0.60,
+):
     finite_mask = _prediction_valid_mask(boxes, labels, scores)
     class_mask = finite_mask.copy()
     target_ids = None if target_class_ids is None else np.asarray(target_class_ids, dtype=np.int64).reshape(-1)
@@ -107,7 +118,16 @@ def _staged_filter_masks(boxes, labels, scores, target_class_ids, min_proposal_s
     class_thresholds = _class_score_thresholds(labels, class_score_thresh)
     if class_thresholds is not None:
         score_mask &= np.asarray(scores, dtype=np.float32).reshape(-1) >= class_thresholds
-    return finite_mask, class_mask, min_score_mask, score_mask
+
+    rescue_mask = np.zeros_like(score_mask, dtype=bool)
+    if camera_rescue_enabled and camera_support is not None and boxes.shape[0] > 0:
+        support = np.asarray(camera_support, dtype=np.float32).reshape(-1)
+        if support.shape[0] == boxes.shape[0]:
+            score_values = np.asarray(scores, dtype=np.float32).reshape(-1)
+            low_score_mask = score_values >= float(camera_low_score)
+            rescue_mask = class_mask & low_score_mask & (~score_mask) & (support >= float(camera_thresh))
+            score_mask |= rescue_mask
+    return finite_mask, class_mask, min_score_mask, score_mask, rescue_mask
 
 
 def _reliability_summary(reliability_sum, num_matched, clean_valid_count, perturbed_valid_count, support_tau):
@@ -142,6 +162,8 @@ def compute_spcra_reliability(
     clean_pred_dicts,
     perturbed_pred_dicts,
     perturbed_lidar_aug_matrices=None,
+    clean_camera_supports=None,
+    perturbed_camera_supports=None,
     target_class_ids=None,
     min_proposal_score=0.0,
     topk_per_class=0,
@@ -149,6 +171,10 @@ def compute_spcra_reliability(
     max_center_distance=1.0,
     reliability_floor=0.05,
     support_tau=3.0,
+    reliability_clamp_max=1.0,
+    camera_rescue_enabled=False,
+    camera_low_score=0.05,
+    camera_thresh=0.60,
 ):
     """Compare clean and sparse-perturbed predictions and return per-box weights."""
     sidecars = []
@@ -163,6 +189,8 @@ def compute_spcra_reliability(
         'perturbed_min_score_valid_boxes': 0,
         'clean_score_valid_boxes': 0,
         'perturbed_score_valid_boxes': 0,
+        'clean_rescue_boxes': 0,
+        'perturbed_rescue_boxes': 0,
         'clean_valid_boxes': 0,
         'perturbed_valid_boxes': 0,
         'clean_filtered_boxes': 0,
@@ -178,25 +206,40 @@ def compute_spcra_reliability(
     }
     distance_limit = max(float(max_center_distance), 1e-6)
     floor = float(np.clip(reliability_floor, 0.0, 1.0))
+    clamp_max = float(np.clip(reliability_clamp_max, 0.0, 1.0))
 
-    for clean_pred, perturbed_pred in zip(clean_pred_dicts, perturbed_pred_dicts):
+    for frame_index, (clean_pred, perturbed_pred) in enumerate(zip(clean_pred_dicts, perturbed_pred_dicts)):
         clean_boxes, clean_labels, clean_scores, clean_box_tensor = _prediction_arrays(clean_pred)
         perturbed_boxes, perturbed_labels, perturbed_scores, _ = _prediction_arrays(perturbed_pred)
-        clean_prefilter_valid_mask, clean_class_mask, clean_min_score_mask, clean_score_mask = _staged_filter_masks(
+        clean_camera_support = None
+        perturbed_camera_support = None
+        if clean_camera_supports is not None and frame_index < len(clean_camera_supports):
+            clean_camera_support = clean_camera_supports[frame_index]
+        if perturbed_camera_supports is not None and frame_index < len(perturbed_camera_supports):
+            perturbed_camera_support = perturbed_camera_supports[frame_index]
+        clean_prefilter_valid_mask, clean_class_mask, clean_min_score_mask, clean_score_mask, clean_rescue_mask = _staged_filter_masks(
             clean_boxes,
             clean_labels,
             clean_scores,
             target_class_ids,
             min_proposal_score,
             class_score_thresh,
+            camera_support=clean_camera_support,
+            camera_rescue_enabled=camera_rescue_enabled,
+            camera_low_score=camera_low_score,
+            camera_thresh=camera_thresh,
         )
-        perturbed_prefilter_valid_mask, perturbed_class_mask, perturbed_min_score_mask, perturbed_score_mask = _staged_filter_masks(
+        perturbed_prefilter_valid_mask, perturbed_class_mask, perturbed_min_score_mask, perturbed_score_mask, perturbed_rescue_mask = _staged_filter_masks(
             perturbed_boxes,
             perturbed_labels,
             perturbed_scores,
             target_class_ids,
             min_proposal_score,
             class_score_thresh,
+            camera_support=perturbed_camera_support,
+            camera_rescue_enabled=camera_rescue_enabled,
+            camera_low_score=camera_low_score,
+            camera_thresh=camera_thresh,
         )
         clean_valid_mask = clean_score_mask.copy()
         perturbed_valid_mask = perturbed_score_mask.copy()
@@ -224,6 +267,8 @@ def compute_spcra_reliability(
         stats['perturbed_min_score_valid_boxes'] += int(perturbed_min_score_mask.sum())
         stats['clean_score_valid_boxes'] += int(clean_score_mask.sum())
         stats['perturbed_score_valid_boxes'] += int(perturbed_score_mask.sum())
+        stats['clean_rescue_boxes'] += int(clean_rescue_mask.sum())
+        stats['perturbed_rescue_boxes'] += int(perturbed_rescue_mask.sum())
         stats['clean_valid_boxes'] += int(clean_valid_mask.sum())
         stats['perturbed_valid_boxes'] += int(perturbed_valid_mask.sum())
         stats['clean_filtered_boxes'] += int(clean_prefilter_valid_mask.sum() - clean_valid_mask.sum())
@@ -280,7 +325,9 @@ def compute_spcra_reliability(
             perturbed_valid_indices.size,
             support_tau,
         )
+        reliability_used = min(reliability_used, clamp_max)
         reliability *= float(coverage * support)
+        reliability = np.minimum(reliability, clamp_max)
         stats['reliability_sum'] += reliability_used
         stats['reliability_raw_sum'] += frame_reliability_sum
         stats['coverage_sum'] += coverage

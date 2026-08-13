@@ -38,6 +38,8 @@ def _new_spcra_stats(enabled):
         'perturbed_min_score_valid_boxes': 0.0,
         'clean_score_valid_boxes': 0.0,
         'perturbed_score_valid_boxes': 0.0,
+        'clean_rescue_boxes': 0.0,
+        'perturbed_rescue_boxes': 0.0,
         'clean_valid_boxes': 0.0,
         'perturbed_valid_boxes': 0.0,
         'clean_filtered_boxes': 0.0,
@@ -383,10 +385,15 @@ class MOS(object):
         if was_training:
             model.train()
 
+        clean_camera_supports = self._build_camera_supports(batch_dict, clean_pred_dicts, spcra_cfg)
+        perturbed_camera_supports = self._build_camera_supports(disturbed_batch, perturbed_pred_dicts, spcra_cfg)
+
         sidecars, stats = compute_spcra_reliability(
             clean_pred_dicts,
             perturbed_pred_dicts,
             disturbed_batch.get('lidar_aug_matrix', None),
+            clean_camera_supports=clean_camera_supports,
+            perturbed_camera_supports=perturbed_camera_supports,
             target_class_ids=target_class_ids,
             min_proposal_score=min_proposal_score,
             topk_per_class=topk_per_class,
@@ -394,6 +401,10 @@ class MOS(object):
             max_center_distance=spcra_cfg.get('MAX_CENTER_DISTANCE', 1.0),
             reliability_floor=spcra_cfg.get('RELIABILITY_FLOOR', 0.05),
             support_tau=spcra_cfg.get('SUPPORT_TAU', 3.0),
+            reliability_clamp_max=spcra_cfg.get('RELIABILITY_CLAMP_MAX', 1.0),
+            camera_rescue_enabled=spcra_cfg.get('CAMERA_RESCUE_ENABLED', False),
+            camera_low_score=spcra_cfg.get('CAMERA_LOW_SCORE', 0.05),
+            camera_thresh=spcra_cfg.get('CAMERA_THRESH', 0.60),
         )
         stats['enabled'] = 1.0
         work_pred_dicts = []
@@ -405,8 +416,8 @@ class MOS(object):
         log_interval = int(spcra_cfg.get('LOG_INTERVAL', 50))
         if self.rank == 0 and log_interval > 0 and self.total_samples_seen % log_interval == 0:
             self.logger.info(
-                '[MM-MOS][SPCRA] samples_seen=%d | clean raw=%d finite=%d cls=%d min=%d score=%d topk=%d | '
-                'pert raw=%d finite=%d cls=%d min=%d score=%d topk=%d | matched=%d | '
+                '[MM-MOS][SPCRA] samples_seen=%d | clean raw=%d finite=%d cls=%d min=%d score=%d rescue=%d topk=%d | '
+                'pert raw=%d finite=%d cls=%d min=%d score=%d rescue=%d topk=%d | matched=%d | '
                 'match_rate=%.3f | rel_used=%.3f raw=%.3f cov=%.3f support=%.3f',
                 self.total_samples_seen,
                 int(stats['clean_boxes']),
@@ -414,12 +425,14 @@ class MOS(object):
                 int(stats.get('clean_class_valid_boxes', 0.0)),
                 int(stats.get('clean_min_score_valid_boxes', 0.0)),
                 int(stats.get('clean_score_valid_boxes', 0.0)),
+                int(stats.get('clean_rescue_boxes', 0.0)),
                 int(stats.get('clean_valid_boxes', 0.0)),
                 int(stats['perturbed_boxes']),
                 int(stats.get('perturbed_prefilter_valid_boxes', 0.0)),
                 int(stats.get('perturbed_class_valid_boxes', 0.0)),
                 int(stats.get('perturbed_min_score_valid_boxes', 0.0)),
                 int(stats.get('perturbed_score_valid_boxes', 0.0)),
+                int(stats.get('perturbed_rescue_boxes', 0.0)),
                 int(stats.get('perturbed_valid_boxes', 0.0)),
                 int(stats['matched_boxes']),
                 float(stats['match_rate']),
@@ -429,6 +442,41 @@ class MOS(object):
                 float(stats.get('support_mean', 0.0)),
             )
         return work_pred_dicts, stats
+
+    def _build_camera_supports(self, batch_dict, pred_dicts, spcra_cfg):
+        if not bool(spcra_cfg.get('CAMERA_RESCUE_ENABLED', False)):
+            return None
+
+        image_bev = batch_dict.get('spatial_features_img', None)
+        if image_bev is None or not torch.is_tensor(image_bev) or image_bev.ndim != 4:
+            return None
+
+        point_cloud_range = getattr(self.dataset, 'point_cloud_range', None)
+        if point_cloud_range is None:
+            point_cloud_range = cfg.DATA_CONFIG.get('POINT_CLOUD_RANGE', None)
+        if point_cloud_range is None:
+            return None
+
+        range_tensor = torch.as_tensor(point_cloud_range, device=image_bev.device, dtype=image_bev.dtype)
+        supports = []
+        for batch_index, pred_dict in enumerate(pred_dicts):
+            boxes = pred_dict.get('pred_boxes', None)
+            if batch_index >= image_bev.shape[0] or boxes is None or not torch.is_tensor(boxes) or boxes.numel() == 0:
+                supports.append(np.zeros((0,), dtype=np.float32))
+                continue
+
+            centers = boxes[:, :3].to(device=image_bev.device, dtype=image_bev.dtype)
+            height, width = image_bev.shape[-2:]
+            x_norm = (centers[:, 0] - range_tensor[0]) / (range_tensor[3] - range_tensor[0]).clamp(min=1e-6) * 2.0 - 1.0
+            y_norm = (centers[:, 1] - range_tensor[1]) / (range_tensor[4] - range_tensor[1]).clamp(min=1e-6) * 2.0 - 1.0
+            grid = torch.stack([x_norm, y_norm], dim=-1).view(1, -1, 1, 2)
+            sampled = F.grid_sample(image_bev[batch_index:batch_index + 1], grid, mode='bilinear', align_corners=True)
+            energy = sampled.squeeze(0).squeeze(-1).transpose(0, 1).abs().mean(dim=1)
+            energy_std = energy.detach().std().clamp(min=1e-6)
+            energy_centered = (energy - energy.detach().mean()) / energy_std
+            support = torch.sigmoid(float(spcra_cfg.get('CAMERA_SUPPORT_SCALE', 4.0)) * energy_centered)
+            supports.append(support.detach().cpu().numpy().astype(np.float32, copy=False))
+        return supports
 
     @staticmethod
     def _tensor_scalar(value, default=0.0):
@@ -444,7 +492,8 @@ class MOS(object):
             'enabled', 'clean_boxes', 'perturbed_boxes', 'clean_prefilter_valid_boxes',
             'perturbed_prefilter_valid_boxes', 'clean_class_valid_boxes', 'perturbed_class_valid_boxes',
             'clean_min_score_valid_boxes', 'perturbed_min_score_valid_boxes', 'clean_score_valid_boxes',
-            'perturbed_score_valid_boxes', 'clean_valid_boxes', 'perturbed_valid_boxes',
+            'perturbed_score_valid_boxes', 'clean_rescue_boxes', 'perturbed_rescue_boxes',
+            'clean_valid_boxes', 'perturbed_valid_boxes',
             'clean_filtered_boxes', 'perturbed_filtered_boxes', 'matched_boxes', 'match_rate',
             'reliability_mean', 'reliability_raw_mean', 'coverage_mean', 'support_mean',
             'effective_ref_boxes', 'effective_frames', 'reliability_min'

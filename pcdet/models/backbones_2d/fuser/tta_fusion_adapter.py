@@ -82,7 +82,7 @@ class BEVFusionTTAAdapter(nn.Module):
             )
 
         self.residual_scale = nn.Parameter(
-            torch.tensor(float(model_cfg.get('RESIDUAL_SCALE_INIT', 0.0)), dtype=torch.float32)
+            torch.tensor(float(model_cfg.get('RESIDUAL_SCALE_INIT', 0.1)), dtype=torch.float32)
         )
         if point_cloud_range is not None:
             self.register_buffer('point_cloud_range', torch.tensor(point_cloud_range, dtype=torch.float32))

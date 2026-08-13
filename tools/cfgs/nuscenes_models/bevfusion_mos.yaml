@@ -147,7 +147,7 @@ MODEL:
         GROUP_NORM_GROUPS: 8
         ROUTER_MODE: shared_plus_class
         POOL_SIZE: 3
-        RESIDUAL_SCALE_INIT: 1.0
+        RESIDUAL_SCALE_INIT: 0.1
         SG_DFA:
             ENABLED: False
             GRID_SIZE: 32
@@ -297,6 +297,11 @@ TTA:
         TOPK_PER_CLASS: 8
         USE_SELF_TRAIN_SCORE_THRESH: True
         SUPPORT_TAU: 3.0
+        RELIABILITY_CLAMP_MAX: 0.20
+        CAMERA_RESCUE_ENABLED: False
+        CAMERA_LOW_SCORE: 0.10
+        CAMERA_THRESH: 0.60
+        CAMERA_SUPPORT_SCALE: 4.0
         MAX_CENTER_DISTANCE: 1.0
         RELIABILITY_FLOOR: 0.05
         LOG_INTERVAL: 50
