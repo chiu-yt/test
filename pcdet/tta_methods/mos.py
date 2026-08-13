@@ -32,6 +32,12 @@ def _new_spcra_stats(enabled):
         'perturbed_boxes': 0.0,
         'clean_prefilter_valid_boxes': 0.0,
         'perturbed_prefilter_valid_boxes': 0.0,
+        'clean_class_valid_boxes': 0.0,
+        'perturbed_class_valid_boxes': 0.0,
+        'clean_min_score_valid_boxes': 0.0,
+        'perturbed_min_score_valid_boxes': 0.0,
+        'clean_score_valid_boxes': 0.0,
+        'perturbed_score_valid_boxes': 0.0,
         'clean_valid_boxes': 0.0,
         'perturbed_valid_boxes': 0.0,
         'clean_filtered_boxes': 0.0,
@@ -39,6 +45,11 @@ def _new_spcra_stats(enabled):
         'matched_boxes': 0.0,
         'match_rate': 0.0,
         'reliability_mean': 1.0,
+        'reliability_raw_mean': 1.0,
+        'coverage_mean': 0.0,
+        'support_mean': 0.0,
+        'effective_ref_boxes': 0.0,
+        'effective_frames': 0.0,
         'reliability_min': 1.0,
     }
 
@@ -382,6 +393,7 @@ class MOS(object):
             class_score_thresh=class_score_thresh,
             max_center_distance=spcra_cfg.get('MAX_CENTER_DISTANCE', 1.0),
             reliability_floor=spcra_cfg.get('RELIABILITY_FLOOR', 0.05),
+            support_tau=spcra_cfg.get('SUPPORT_TAU', 3.0),
         )
         stats['enabled'] = 1.0
         work_pred_dicts = []
@@ -393,18 +405,28 @@ class MOS(object):
         log_interval = int(spcra_cfg.get('LOG_INTERVAL', 50))
         if self.rank == 0 and log_interval > 0 and self.total_samples_seen % log_interval == 0:
             self.logger.info(
-                '[MM-MOS][SPCRA] samples_seen=%d | clean_eff=%d/%d pre=%d | pert_eff=%d/%d pre=%d | matched=%d | '
-                'match_rate=%.3f | reliability=%.3f',
+                '[MM-MOS][SPCRA] samples_seen=%d | clean raw=%d finite=%d cls=%d min=%d score=%d topk=%d | '
+                'pert raw=%d finite=%d cls=%d min=%d score=%d topk=%d | matched=%d | '
+                'match_rate=%.3f | rel_used=%.3f raw=%.3f cov=%.3f support=%.3f',
                 self.total_samples_seen,
-                int(stats.get('clean_valid_boxes', 0.0)),
                 int(stats['clean_boxes']),
                 int(stats.get('clean_prefilter_valid_boxes', 0.0)),
-                int(stats.get('perturbed_valid_boxes', 0.0)),
+                int(stats.get('clean_class_valid_boxes', 0.0)),
+                int(stats.get('clean_min_score_valid_boxes', 0.0)),
+                int(stats.get('clean_score_valid_boxes', 0.0)),
+                int(stats.get('clean_valid_boxes', 0.0)),
                 int(stats['perturbed_boxes']),
                 int(stats.get('perturbed_prefilter_valid_boxes', 0.0)),
+                int(stats.get('perturbed_class_valid_boxes', 0.0)),
+                int(stats.get('perturbed_min_score_valid_boxes', 0.0)),
+                int(stats.get('perturbed_score_valid_boxes', 0.0)),
+                int(stats.get('perturbed_valid_boxes', 0.0)),
                 int(stats['matched_boxes']),
                 float(stats['match_rate']),
                 float(stats['reliability_mean']),
+                float(stats.get('reliability_raw_mean', 0.0)),
+                float(stats.get('coverage_mean', 0.0)),
+                float(stats.get('support_mean', 0.0)),
             )
         return work_pred_dicts, stats
 
@@ -420,9 +442,12 @@ class MOS(object):
         stats = self.spcra_stats
         for key in [
             'enabled', 'clean_boxes', 'perturbed_boxes', 'clean_prefilter_valid_boxes',
-            'perturbed_prefilter_valid_boxes', 'clean_valid_boxes', 'perturbed_valid_boxes',
+            'perturbed_prefilter_valid_boxes', 'clean_class_valid_boxes', 'perturbed_class_valid_boxes',
+            'clean_min_score_valid_boxes', 'perturbed_min_score_valid_boxes', 'clean_score_valid_boxes',
+            'perturbed_score_valid_boxes', 'clean_valid_boxes', 'perturbed_valid_boxes',
             'clean_filtered_boxes', 'perturbed_filtered_boxes', 'matched_boxes', 'match_rate',
-            'reliability_mean', 'reliability_min'
+            'reliability_mean', 'reliability_raw_mean', 'coverage_mean', 'support_mean',
+            'effective_ref_boxes', 'effective_frames', 'reliability_min'
         ]:
             tb_dict['spcra/%s' % key] = float(stats.get(key, 0.0))
         disp_dict['spcra_rel'] = '%.2f' % float(stats.get('reliability_mean', 1.0))
@@ -444,11 +469,15 @@ class MOS(object):
         density_nonzero = self._tensor_scalar(batch_dict.get('tta_adapter_density_nonzero', None))
         gate_mean = self._tensor_scalar(batch_dict.get('tta_adapter_gate_mean', None))
         residual_mean = self._tensor_scalar(batch_dict.get('tta_adapter_residual_mean', None))
+        residual_scale = self._tensor_scalar(batch_dict.get('tta_adapter_residual_scale', None))
+        rel_diff = self._tensor_scalar(batch_dict.get('tta_adapter_output_input_rel_diff', None))
         tb_dict['sg_dfa/enabled'] = enabled
         tb_dict['sg_dfa/density_mean'] = density_mean
         tb_dict['sg_dfa/density_nonzero'] = density_nonzero
         tb_dict['sg_dfa/gate_mean'] = gate_mean
         tb_dict['sg_dfa/residual_mean'] = residual_mean
+        tb_dict['sg_dfa/residual_scale'] = residual_scale
+        tb_dict['sg_dfa/output_input_rel_diff'] = rel_diff
         disp_dict['sg_dfa'] = '%.2f/%.2f' % (density_mean, gate_mean)
 
     def _dpo_matcher_enabled(self):

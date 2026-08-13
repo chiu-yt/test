@@ -93,6 +93,34 @@ def _effective_valid_mask(boxes, labels, scores, target_class_ids, min_proposal_
     return valid_mask
 
 
+def _staged_filter_masks(boxes, labels, scores, target_class_ids, min_proposal_score, class_score_thresh):
+    finite_mask = _prediction_valid_mask(boxes, labels, scores)
+    class_mask = finite_mask.copy()
+    target_ids = None if target_class_ids is None else np.asarray(target_class_ids, dtype=np.int64).reshape(-1)
+    if target_ids is not None and target_ids.size > 0:
+        class_mask &= np.isin(np.abs(np.asarray(labels, dtype=np.int64).reshape(-1)), target_ids)
+
+    min_score_mask = class_mask.copy()
+    min_score_mask &= np.asarray(scores, dtype=np.float32).reshape(-1) >= float(min_proposal_score)
+
+    score_mask = min_score_mask.copy()
+    class_thresholds = _class_score_thresholds(labels, class_score_thresh)
+    if class_thresholds is not None:
+        score_mask &= np.asarray(scores, dtype=np.float32).reshape(-1) >= class_thresholds
+    return finite_mask, class_mask, min_score_mask, score_mask
+
+
+def _reliability_summary(reliability_sum, num_matched, clean_valid_count, perturbed_valid_count, support_tau):
+    n_ref = min(float(clean_valid_count), float(perturbed_valid_count))
+    if n_ref < 2.0 or num_matched < 2:
+        return 0.0, 0.0, 0.0, n_ref
+
+    coverage = float(num_matched) / max(n_ref, 1.0)
+    support = 1.0 - math.exp(-float(num_matched) / max(float(support_tau), 1e-6))
+    instance_quality = float(reliability_sum) / max(float(num_matched), 1.0)
+    return instance_quality * coverage * support, coverage, support, n_ref
+
+
 def _topk_per_class_mask(labels, scores, valid_mask, topk_per_class):
     if int(topk_per_class) <= 0 or not bool(np.any(valid_mask)):
         return valid_mask
@@ -120,6 +148,7 @@ def compute_spcra_reliability(
     class_score_thresh=None,
     max_center_distance=1.0,
     reliability_floor=0.05,
+    support_tau=3.0,
 ):
     """Compare clean and sparse-perturbed predictions and return per-box weights."""
     sidecars = []
@@ -128,12 +157,23 @@ def compute_spcra_reliability(
         'perturbed_boxes': 0,
         'clean_prefilter_valid_boxes': 0,
         'perturbed_prefilter_valid_boxes': 0,
+        'clean_class_valid_boxes': 0,
+        'perturbed_class_valid_boxes': 0,
+        'clean_min_score_valid_boxes': 0,
+        'perturbed_min_score_valid_boxes': 0,
+        'clean_score_valid_boxes': 0,
+        'perturbed_score_valid_boxes': 0,
         'clean_valid_boxes': 0,
         'perturbed_valid_boxes': 0,
         'clean_filtered_boxes': 0,
         'perturbed_filtered_boxes': 0,
         'matched_boxes': 0,
         'reliability_sum': 0.0,
+        'reliability_raw_sum': 0.0,
+        'coverage_sum': 0.0,
+        'support_sum': 0.0,
+        'effective_ref_boxes': 0.0,
+        'effective_frames': 0,
         'reliability_min': 1.0,
     }
     distance_limit = max(float(max_center_distance), 1e-6)
@@ -142,9 +182,7 @@ def compute_spcra_reliability(
     for clean_pred, perturbed_pred in zip(clean_pred_dicts, perturbed_pred_dicts):
         clean_boxes, clean_labels, clean_scores, clean_box_tensor = _prediction_arrays(clean_pred)
         perturbed_boxes, perturbed_labels, perturbed_scores, _ = _prediction_arrays(perturbed_pred)
-        clean_prefilter_valid_mask = _prediction_valid_mask(clean_boxes, clean_labels, clean_scores)
-        perturbed_prefilter_valid_mask = _prediction_valid_mask(perturbed_boxes, perturbed_labels, perturbed_scores)
-        clean_valid_mask = _effective_valid_mask(
+        clean_prefilter_valid_mask, clean_class_mask, clean_min_score_mask, clean_score_mask = _staged_filter_masks(
             clean_boxes,
             clean_labels,
             clean_scores,
@@ -152,7 +190,7 @@ def compute_spcra_reliability(
             min_proposal_score,
             class_score_thresh,
         )
-        perturbed_valid_mask = _effective_valid_mask(
+        perturbed_prefilter_valid_mask, perturbed_class_mask, perturbed_min_score_mask, perturbed_score_mask = _staged_filter_masks(
             perturbed_boxes,
             perturbed_labels,
             perturbed_scores,
@@ -160,6 +198,8 @@ def compute_spcra_reliability(
             min_proposal_score,
             class_score_thresh,
         )
+        clean_valid_mask = clean_score_mask.copy()
+        perturbed_valid_mask = perturbed_score_mask.copy()
         clean_valid_mask = _topk_per_class_mask(clean_labels, clean_scores, clean_valid_mask, topk_per_class)
         perturbed_valid_mask = _topk_per_class_mask(perturbed_labels, perturbed_scores, perturbed_valid_mask, topk_per_class)
         if perturbed_lidar_aug_matrices is not None:
@@ -178,6 +218,12 @@ def compute_spcra_reliability(
         stats['perturbed_boxes'] += int(perturbed_boxes.shape[0])
         stats['clean_prefilter_valid_boxes'] += int(clean_prefilter_valid_mask.sum())
         stats['perturbed_prefilter_valid_boxes'] += int(perturbed_prefilter_valid_mask.sum())
+        stats['clean_class_valid_boxes'] += int(clean_class_mask.sum())
+        stats['perturbed_class_valid_boxes'] += int(perturbed_class_mask.sum())
+        stats['clean_min_score_valid_boxes'] += int(clean_min_score_mask.sum())
+        stats['perturbed_min_score_valid_boxes'] += int(perturbed_min_score_mask.sum())
+        stats['clean_score_valid_boxes'] += int(clean_score_mask.sum())
+        stats['perturbed_score_valid_boxes'] += int(perturbed_score_mask.sum())
         stats['clean_valid_boxes'] += int(clean_valid_mask.sum())
         stats['perturbed_valid_boxes'] += int(perturbed_valid_mask.sum())
         stats['clean_filtered_boxes'] += int(clean_prefilter_valid_mask.sum() - clean_valid_mask.sum())
@@ -198,6 +244,8 @@ def compute_spcra_reliability(
         perturbed_valid_labels = perturbed_labels[perturbed_valid_indices]
         perturbed_valid_scores = perturbed_scores[perturbed_valid_indices]
 
+        frame_reliability_sum = 0.0
+        frame_matched_boxes = 0
         for local_index, clean_index in enumerate(clean_valid_indices.tolist()):
             candidate_indices = np.where(clean_valid_labels[local_index] == perturbed_valid_labels)[0]
             candidate_indices = [idx for idx in candidate_indices.tolist() if idx not in used_perturbed]
@@ -222,17 +270,37 @@ def compute_spcra_reliability(
             cost = center_distance / distance_limit + 0.5 * dimension_cost + 0.5 * score_cost
             reliability[clean_index] = max(floor, min(1.0, math.exp(-cost)))
             stats['matched_boxes'] += 1
+            frame_matched_boxes += 1
+            frame_reliability_sum += float(reliability[clean_index])
+
+        reliability_used, coverage, support, n_ref = _reliability_summary(
+            frame_reliability_sum,
+            frame_matched_boxes,
+            clean_valid_indices.size,
+            perturbed_valid_indices.size,
+            support_tau,
+        )
+        reliability *= float(coverage * support)
+        stats['reliability_sum'] += reliability_used
+        stats['reliability_raw_sum'] += frame_reliability_sum
+        stats['coverage_sum'] += coverage
+        stats['support_sum'] += support
+        stats['effective_ref_boxes'] += n_ref
+        stats['effective_frames'] += 1
 
         if clean_box_tensor is not None and torch.is_tensor(clean_box_tensor):
             sidecars.append(torch.as_tensor(reliability, dtype=torch.float32, device=clean_box_tensor.device))
         else:
             sidecars.append(torch.as_tensor(reliability, dtype=torch.float32))
         if reliability.size > 0:
-            stats['reliability_sum'] += float(reliability.sum())
             stats['reliability_min'] = min(stats['reliability_min'], float(reliability.min()))
 
     clean_count = max(float(stats['clean_boxes']), 1.0)
     valid_count = max(min(float(stats['clean_valid_boxes']), float(stats['perturbed_valid_boxes'])), 1.0)
+    frame_count = max(float(stats['effective_frames']), 1.0)
     stats['match_rate'] = float(stats['matched_boxes']) / valid_count
-    stats['reliability_mean'] = stats['reliability_sum'] / clean_count
+    stats['reliability_raw_mean'] = stats['reliability_raw_sum'] / clean_count
+    stats['reliability_mean'] = stats['reliability_sum'] / frame_count
+    stats['coverage_mean'] = stats['coverage_sum'] / frame_count
+    stats['support_mean'] = stats['support_sum'] / frame_count
     return sidecars, stats

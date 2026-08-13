@@ -308,4 +308,9 @@ class BEVFusionTTAAdapter(nn.Module):
         batch_dict['tta_adapter_residual_mean'] = (
             shared_residual.detach().abs().mean() + proposal_residual.detach().abs().mean()
         )
+        batch_dict['tta_adapter_residual_scale'] = self.residual_scale.detach()
+        batch_dict['tta_adapter_output_input_rel_diff'] = (
+            (batch_dict['spatial_features'].detach() - fused_bev.detach()).abs().mean()
+            / fused_bev.detach().abs().mean().clamp(min=1e-6)
+        )
         return batch_dict

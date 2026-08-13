@@ -147,7 +147,7 @@ MODEL:
         GROUP_NORM_GROUPS: 8
         ROUTER_MODE: shared_plus_class
         POOL_SIZE: 3
-        RESIDUAL_SCALE_INIT: 0.0
+        RESIDUAL_SCALE_INIT: 1.0
         SG_DFA:
             ENABLED: False
             GRID_SIZE: 32
