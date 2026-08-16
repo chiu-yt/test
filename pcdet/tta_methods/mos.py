@@ -14,6 +14,7 @@ from pcdet.config import cfg
 from pcdet.models import load_data_to_gpu, build_network
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils, box_utils
+from pcdet.utils.hard_pseudo_mining import hard_pseudo_mining
 from pcdet.utils.tta_utils import TTA_augmentation, build_tta_density_map
 from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
 from pcdet.tta_methods.reliability import apply_sparse_point_perturbation, compute_spcra_reliability
@@ -23,6 +24,7 @@ PSEUDO_LABELS = {}
 NEW_PSEUDO_LABELS = {}
 GEOMETRY_FILTER_STATS = {}
 RG_PLM_STATS = {}
+HARD_PSEUDO_STATS = {}
 
 
 def _new_spcra_stats(enabled):
@@ -306,10 +308,25 @@ class MOS(object):
             _add_geometry_filter_stats_to_logs(geometry_filter_stats, tb_dict, disp_dict)
             self._add_dpo_matcher_stats_to_logs(tb_dict, disp_dict)
             self._add_spcra_stats_to_logs(tb_dict, disp_dict)
+            _add_hard_pseudo_stats_to_logs(_get_hard_pseudo_stats(), tb_dict, disp_dict)
             self._add_rg_plm_stats_to_logs(tb_dict, disp_dict)
             self._add_sg_dfa_stats_to_logs(target_batch, tb_dict, disp_dict)
 
         if self.rank == 0 and (self.total_samples_seen % 50 == 0):
+            hard_stats = _get_hard_pseudo_stats()
+            if float(hard_stats.get('enabled', 0.0)) > 0.0:
+                hard_by_class = ','.join([
+                    f"{name}={int(hard_stats.get('hard/%s' % name, 0.0))}"
+                    for name in cfg.SELF_TRAIN.HARD_PSEUDO_MINING.get('TARGET_CLASSES', [])
+                ])
+                self.logger.info(
+                    f"[MM-MOS][HardMining] easy={int(hard_stats.get('easy', 0.0))} | "
+                    f"hard={int(hard_stats.get('hard', 0.0))} | "
+                    f"ignored={int(hard_stats.get('ignored', 0.0))} | "
+                    f"hard_by_class=({hard_by_class}) | "
+                    f"hard_mean_score={float(hard_stats.get('hard_mean_score', 0.0)):.3f} | "
+                    f"hard_mean_rel={float(hard_stats.get('hard_mean_rel', 0.0)):.3f}"
+                )
             self.logger.info(
                 f"[MM-MOS][TailDiag] GT(cv/bus/tr/cone)={gt_tail} | Pseudo(cv/bus/tr/cone)={ps_tail}"
             )
@@ -986,6 +1003,12 @@ class MOS(object):
         # 统一使用 10 列: [x,y,z,dx,dy,dz,yaw,vx,vy,cls]
         ps_batch = torch.zeros(len(fids), max_box, 10, device=device)
 
+        hpm_cfg = cfg.SELF_TRAIN.get('HARD_PSEUDO_MINING', None)
+        hpm_enabled = bool(hpm_cfg is not None and hpm_cfg.get('ENABLED', False))
+        # 默认 1.0，避免某个 frame 缺失权重时误伤高置信框（padding 位置由 head 过滤）
+        ps_weights_batch = torch.ones(len(fids), max_box, device=device)
+        ps_reg_weights_batch = torch.ones(len(fids), max_box, device=device)
+
         for b_id, fid in enumerate(fids):
             ps_raw = NEW_PSEUDO_LABELS[fid]['gt_boxes']
             if ps_raw is None or len(ps_raw) == 0:
@@ -1073,7 +1096,24 @@ class MOS(object):
             cur_num = ps10.shape[0]
             ps_batch[b_id, :cur_num, :] = ps10
 
+            if hpm_enabled:
+                pw = NEW_PSEUDO_LABELS[fid].get('pseudo_cls_weights', None)
+                if pw is None:
+                    pw = NEW_PSEUDO_LABELS[fid].get('pseudo_loss_weights', None)
+                if pw is not None and len(pw) > 0:
+                    pw_t = torch.as_tensor(np.asarray(pw, dtype=np.float32), device=device).float()
+                    cur_pw_num = min(pw_t.shape[0], max_box)
+                    ps_weights_batch[b_id, :cur_pw_num] = pw_t[:cur_pw_num]
+                rw = NEW_PSEUDO_LABELS[fid].get('pseudo_reg_weights', None)
+                if rw is not None and len(rw) > 0:
+                    rw_t = torch.as_tensor(np.asarray(rw, dtype=np.float32), device=device).float()
+                    cur_rw_num = min(rw_t.shape[0], max_box)
+                    ps_reg_weights_batch[b_id, :cur_rw_num] = rw_t[:cur_rw_num]
+
         batch_dict['gt_boxes'] = ps_batch
+        if hpm_enabled:
+            batch_dict['tta_pseudo_weights'] = ps_weights_batch
+            batch_dict['tta_pseudo_reg_weights'] = ps_reg_weights_batch
 
     def _find_ckpt_dir(self):
         # Auto-detect checkpoint directory based on current working setup (fallback only)
@@ -1206,7 +1246,105 @@ def _slice_gt_infos(gt_infos, keep_mask):
     }
     if gt_infos.get('reliability_weights', None) is not None:
         filtered_infos['reliability_weights'] = gt_infos['reliability_weights'][keep_mask]
+    if gt_infos.get('pseudo_loss_weights', None) is not None:
+        filtered_infos['pseudo_loss_weights'] = gt_infos['pseudo_loss_weights'][keep_mask]
+    if gt_infos.get('pseudo_cls_weights', None) is not None:
+        filtered_infos['pseudo_cls_weights'] = gt_infos['pseudo_cls_weights'][keep_mask]
+    if gt_infos.get('pseudo_reg_weights', None) is not None:
+        filtered_infos['pseudo_reg_weights'] = gt_infos['pseudo_reg_weights'][keep_mask]
     return filtered_infos
+
+
+def _apply_hard_pseudo_mining(gt_infos):
+    global HARD_PSEUDO_STATS
+    """
+    HINTED-style hard pseudo mining. Runs after the quality filters and before
+    RG-PLM: keep high-score pseudo labels at weight 1.0, rescue supported
+    medium-score target-class boxes at MEDIUM_WEIGHT, and leave unsupported
+    medium/low boxes ignored at weight 0.0. The per-box weights are stored in
+    the ``pseudo_loss_weights`` sidecar and later carried into the head.
+    """
+    hpm_cfg = cfg.SELF_TRAIN.get('HARD_PSEUDO_MINING', None)
+    if hpm_cfg is None or not hpm_cfg.get('ENABLED', False):
+        return gt_infos
+
+    gt_boxes = gt_infos.get('gt_boxes', None)
+    if gt_boxes is None or len(gt_boxes) == 0:
+        return gt_infos
+
+    reliability = gt_infos.get('reliability_weights', None)
+    if reliability is None or len(reliability) != gt_boxes.shape[0]:
+        reliability = np.ones(gt_boxes.shape[0], dtype=np.float32)
+    reliability = np.asarray(reliability, dtype=np.float32)
+
+    target_names = list(hpm_cfg.get('TARGET_CLASSES', []))
+    target_ids = {idx + 1 for idx, name in enumerate(cfg.CLASS_NAMES) if name in target_names}
+
+    new_boxes, pseudo_cls_weights, pseudo_reg_weights = hard_pseudo_mining(
+        gt_boxes=gt_boxes,
+        reliability_weights=reliability,
+        score_thresh=np.asarray(cfg.SELF_TRAIN.SCORE_THRESH, dtype=np.float32),
+        neg_thresh=np.asarray(cfg.SELF_TRAIN.NEG_THRESH, dtype=np.float32),
+        target_class_ids=target_ids,
+        class_names=cfg.CLASS_NAMES,
+        medium_weight=float(hpm_cfg.get('MEDIUM_WEIGHT', 0.3)),
+        medium_reg_weight=float(hpm_cfg.get('MEDIUM_REG_WEIGHT', 0.1)),
+        support_thresh=float(hpm_cfg.get('SUPPORT_THRESH', 0.05)),
+        high_thresh=hpm_cfg.get('HIGH_THRESH', None),
+        low_thresh=hpm_cfg.get('LOW_THRESH', None),
+    )
+
+    result = dict(gt_infos)
+    result['gt_boxes'] = new_boxes
+    result['pseudo_loss_weights'] = pseudo_cls_weights
+    result['pseudo_cls_weights'] = pseudo_cls_weights
+    result['pseudo_reg_weights'] = pseudo_reg_weights
+
+    labels_before = gt_boxes[:, 7].astype(np.int64)
+    labels_after = new_boxes[:, 7].astype(np.int64)
+    hard_mask = (labels_before < 0) & (labels_after > 0) & (pseudo_cls_weights > 0.0)
+    easy_mask = (labels_after > 0) & (pseudo_cls_weights >= 1.0)
+    ignored_mask = labels_after < 0
+    HARD_PSEUDO_STATS['enabled'] = 1.0
+    HARD_PSEUDO_STATS['easy'] = HARD_PSEUDO_STATS.get('easy', 0.0) + float(easy_mask.sum())
+    HARD_PSEUDO_STATS['hard'] = HARD_PSEUDO_STATS.get('hard', 0.0) + float(hard_mask.sum())
+    HARD_PSEUDO_STATS['ignored'] = HARD_PSEUDO_STATS.get('ignored', 0.0) + float(ignored_mask.sum())
+    if hard_mask.any():
+        HARD_PSEUDO_STATS['hard_score_sum'] = HARD_PSEUDO_STATS.get('hard_score_sum', 0.0) + float(new_boxes[hard_mask, 8].sum())
+        reliability_arr = np.asarray(reliability, dtype=np.float32)
+        HARD_PSEUDO_STATS['hard_rel_sum'] = HARD_PSEUDO_STATS.get('hard_rel_sum', 0.0) + float(reliability_arr[hard_mask].sum())
+    for cls_id in sorted(target_ids):
+        if 1 <= cls_id <= len(cfg.CLASS_NAMES):
+            cls_name = cfg.CLASS_NAMES[cls_id - 1]
+            HARD_PSEUDO_STATS[f'hard/{cls_name}'] = HARD_PSEUDO_STATS.get(f'hard/{cls_name}', 0.0) + float((hard_mask & (np.abs(labels_after) == cls_id)).sum())
+    return result
+
+
+def _get_hard_pseudo_stats():
+    stats = copy.deepcopy(HARD_PSEUDO_STATS)
+    hard = float(stats.get('hard', 0.0))
+    if hard > 0:
+        stats['hard_mean_score'] = float(stats.get('hard_score_sum', 0.0)) / hard
+        stats['hard_mean_rel'] = float(stats.get('hard_rel_sum', 0.0)) / hard
+    stats.pop('hard_score_sum', None)
+    stats.pop('hard_rel_sum', None)
+    return stats
+
+
+def _add_hard_pseudo_stats_to_logs(stats, tb_dict, disp_dict):
+    if not stats or float(stats.get('enabled', 0.0)) <= 0.0:
+        return
+    tb_dict['hard_pseudo/easy'] = float(stats.get('easy', 0.0))
+    tb_dict['hard_pseudo/hard'] = float(stats.get('hard', 0.0))
+    tb_dict['hard_pseudo/ignored'] = float(stats.get('ignored', 0.0))
+    tb_dict['hard_pseudo/hard_mean_score'] = float(stats.get('hard_mean_score', 0.0))
+    tb_dict['hard_pseudo/hard_mean_rel'] = float(stats.get('hard_mean_rel', 0.0))
+    for key, value in stats.items():
+        if key.startswith('hard/'):
+            tb_dict[f'hard_pseudo/{key}'] = float(value)
+    disp_dict['hp_easy'] = str(int(stats.get('easy', 0.0)))
+    disp_dict['hp_hard'] = str(int(stats.get('hard', 0.0)))
+    disp_dict['hp_ign'] = str(int(stats.get('ignored', 0.0)))
 
 
 def _apply_rg_plm(gt_infos):
@@ -1431,9 +1569,10 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
     1) 先按阈值生成当前 batch 伪标签
     2) 若启用 MEMORY_ENSEMBLE 且 need_update=True，则与历史伪标签融合
     """
-    global NEW_PSEUDO_LABELS, PSEUDO_LABELS, RG_PLM_STATS
+    global NEW_PSEUDO_LABELS, PSEUDO_LABELS, RG_PLM_STATS, HARD_PSEUDO_STATS
     rg_cfg = cfg.SELF_TRAIN.get('RG_PLM', None)
     RG_PLM_STATS = _new_rg_plm_stats(bool(rg_cfg is not None and rg_cfg.get('ENABLED', False)))
+    HARD_PSEUDO_STATS = {}
     _reset_geometry_filter_stats()
     _update_raw_geometry_filter_stats(input_dict, pred_dicts)
 
@@ -1468,6 +1607,7 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             NEW_PSEUDO_LABELS[fid] = _apply_class_topk_filter(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_adaptive_noisy_class_cap(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_nan_box_filter(NEW_PSEUDO_LABELS[fid])
+            NEW_PSEUDO_LABELS[fid] = _apply_hard_pseudo_mining(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_rg_plm(NEW_PSEUDO_LABELS[fid])
 
     mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', None)

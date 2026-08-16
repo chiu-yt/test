@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 from . import box_utils
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
+from pcdet.utils.equalized_focal_loss import EqualizedFocalClassificationLoss
 
 
 class SigmoidFocalClassificationLoss(nn.Module):

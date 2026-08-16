@@ -85,8 +85,23 @@ class TransFusionHead(nn.Module):
         self.use_sigmoid_cls = loss_cls.get("use_sigmoid", False)
         if not self.use_sigmoid_cls:
             self.num_classes += 1
-        self.loss_cls = loss_utils.SigmoidFocalClassificationLoss(gamma=loss_cls.gamma,alpha=loss_cls.alpha)
+        loss_cls_name = str(loss_cls.get("NAME", "sigmoid_focal")).lower()
+        if loss_cls_name in ("equalized_focal", "efl"):
+            self.loss_cls = loss_utils.EqualizedFocalClassificationLoss(
+                gamma=loss_cls.get("gamma", 2.0),
+                alpha=loss_cls.get("alpha", 0.25),
+                beta=loss_cls.get("EFL_BETA", 0.75),
+                tau=loss_cls.get("EFL_TAU", 0.5),
+                momentum=loss_cls.get("EFL_MOMENTUM", 0.9),
+                min_weight=loss_cls.get("EFL_MIN_WEIGHT", 0.25),
+                max_weight=loss_cls.get("EFL_MAX_WEIGHT", 2.0),
+            )
+        else:
+            self.loss_cls = loss_utils.SigmoidFocalClassificationLoss(
+                gamma=loss_cls.get("gamma", 2.0), alpha=loss_cls.get("alpha", 0.25)
+            )
         self.loss_cls_weight = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['cls_weight']
+        self.pseudo_weight_reg = bool(self.model_cfg.LOSS_CONFIG.get('PSEUDO_WEIGHT_REG', True))
         self.loss_bbox = loss_utils.L1Loss()
         self.loss_bbox_weight = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['bbox_weight']
         self.loss_heatmap = loss_utils.GaussianFocalLoss()
@@ -227,12 +242,18 @@ class TransFusionHead(nn.Module):
             gt_boxes = batch_dict['gt_boxes']
             gt_bboxes_3d = gt_boxes[...,:-1]
             gt_labels_3d =  gt_boxes[...,-1].long() - 1
-            loss, tb_dict = self.loss(gt_bboxes_3d, gt_labels_3d, res)
+            pseudo_weights = batch_dict.get('tta_pseudo_weights', None)
+            pseudo_reg_weights = batch_dict.get('tta_pseudo_reg_weights', None)
+            loss, tb_dict = self.loss(
+                gt_bboxes_3d, gt_labels_3d, res,
+                pseudo_weights=pseudo_weights,
+                pseudo_reg_weights=pseudo_reg_weights,
+            )
             batch_dict['loss'] = loss
             batch_dict['tb_dict'] = tb_dict
         return batch_dict
 
-    def get_targets(self, gt_bboxes_3d, gt_labels_3d, pred_dicts):
+    def get_targets(self, gt_bboxes_3d, gt_labels_3d, pred_dicts, pseudo_weights=None, pseudo_reg_weights=None):
         assign_results = []
         for batch_idx in range(len(gt_bboxes_3d)):
             pred_dict = {}
@@ -251,7 +272,17 @@ class TransFusionHead(nn.Module):
                     and gt_labels[i] >= 0 and gt_labels[i] < self.num_classes
                 ):
                     valid_idx.append(i)
-            assign_result = self.get_targets_single(gt_bboxes[valid_idx], gt_labels_3d[batch_idx][valid_idx], pred_dict)
+            gt_pseudo_weights = None
+            if pseudo_weights is not None:
+                gt_pseudo_weights = pseudo_weights[batch_idx][valid_idx]
+            gt_pseudo_reg_weights = None
+            if pseudo_reg_weights is not None:
+                gt_pseudo_reg_weights = pseudo_reg_weights[batch_idx][valid_idx]
+            assign_result = self.get_targets_single(
+                gt_bboxes[valid_idx], gt_labels_3d[batch_idx][valid_idx], pred_dict,
+                pseudo_weights=gt_pseudo_weights,
+                pseudo_reg_weights=gt_pseudo_reg_weights,
+            )
             assign_results.append(assign_result)
 
         res_tuple = tuple(map(list, zip(*assign_results)))
@@ -265,7 +296,7 @@ class TransFusionHead(nn.Module):
         return labels, label_weights, bbox_targets, bbox_weights, num_pos, matched_ious, heatmap
         
 
-    def get_targets_single(self, gt_bboxes_3d, gt_labels_3d, preds_dict):
+    def get_targets_single(self, gt_bboxes_3d, gt_labels_3d, preds_dict, pseudo_weights=None, pseudo_reg_weights=None):
         
         num_proposals = preds_dict["center"].shape[-1]
         score = copy.deepcopy(preds_dict["heatmap"].detach())
@@ -285,7 +316,7 @@ class TransFusionHead(nn.Module):
             feature_map_size = (self.grid_size[:2] // self.feature_map_stride)
 
             labels = center.new_full((num_proposals,), self.num_classes, dtype=torch.long)
-            label_weights = center.new_ones((num_proposals,), dtype=torch.long)
+            label_weights = center.new_ones((num_proposals,))
             bbox_targets = center.new_zeros((num_proposals, self.code_size))
             bbox_weights = center.new_zeros((num_proposals, self.code_size))
             heatmap = center.new_zeros((self.num_classes, feature_map_size[1], feature_map_size[0]))
@@ -322,7 +353,7 @@ class TransFusionHead(nn.Module):
         bbox_weights = torch.zeros([num_proposals, self.code_size]).to(center.device)
         ious = torch.clamp(ious, min=0.0, max=1.0)
         labels = bboxes_tensor.new_zeros(num_proposals, dtype=torch.long)
-        label_weights = bboxes_tensor.new_zeros(num_proposals, dtype=torch.long)
+        label_weights = bboxes_tensor.new_zeros(num_proposals)
 
         if gt_labels_3d is not None:  # default label is -1
             labels += self.num_classes
@@ -338,6 +369,15 @@ class TransFusionHead(nn.Module):
             else:
                 labels[pos_inds] = gt_labels_3d[pos_assigned_gt_inds]
             label_weights[pos_inds] = 1.0
+
+            if pseudo_weights is not None and pseudo_weights.numel() > 0:
+                pos_pseudo = pseudo_weights[pos_assigned_gt_inds.long()].to(label_weights.dtype)
+                label_weights[pos_inds] = label_weights[pos_inds] * pos_pseudo
+                if self.pseudo_weight_reg:
+                    pos_reg = pos_pseudo
+                    if pseudo_reg_weights is not None and pseudo_reg_weights.numel() > 0:
+                        pos_reg = pseudo_reg_weights[pos_assigned_gt_inds.long()].to(bbox_weights.dtype)
+                    bbox_weights[pos_inds, :] = bbox_weights[pos_inds, :] * pos_reg.unsqueeze(-1)
 
         if len(neg_inds) > 0:
             label_weights[neg_inds] = 1.0
@@ -368,10 +408,14 @@ class TransFusionHead(nn.Module):
         mean_iou = ious[pos_inds].sum() / max(len(pos_inds), 1)
         return (labels[None], label_weights[None], bbox_targets[None], bbox_weights[None], int(pos_inds.shape[0]), float(mean_iou), heatmap[None])
 
-    def loss(self, gt_bboxes_3d, gt_labels_3d, pred_dicts, **kwargs):
+    def loss(self, gt_bboxes_3d, gt_labels_3d, pred_dicts, pseudo_weights=None, pseudo_reg_weights=None, **kwargs):
 
         labels, label_weights, bbox_targets, bbox_weights, num_pos, matched_ious, heatmap = \
-            self.get_targets(gt_bboxes_3d, gt_labels_3d, pred_dicts)
+            self.get_targets(
+                gt_bboxes_3d, gt_labels_3d, pred_dicts,
+                pseudo_weights=pseudo_weights,
+                pseudo_reg_weights=pseudo_reg_weights,
+            )
         loss_dict = dict()
         loss_all = 0
 

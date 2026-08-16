@@ -126,6 +126,24 @@ DPO 代码位于 `/home/zyt/code/DPO-main`，官方实现基于旧 OpenPCDet/ST3
 
 `TTA.MOS_SETTING.AGGREGATE_START_CKPT 999999` 的作用是推迟/禁用 checkpoint aggregation，避免当前主模块效果被 MOS checkpoint merging 混入。第一轮正式全开应先保持 no-aggregation；消融阶段再单独评估 aggregation。
 
+### 0.0.5 2026-08 SPCRA 诊断、Camera rescue 与结构拆分
+
+最新一轮 `lidar_sparsity_s5` 结果显示：继续只调 SPCRA 数字收益有限，主要瓶颈是 score 阈值前置筛选过强，而不是 Hungarian matching。`full_spcra_diag_effrel_gn_scale1_s5_2gpu` 的 mAP 曲线为：iter 0/10/20/30/40/50/100/150/200 = `0.6145 / 0.6158 / 0.6157 / 0.6146 / 0.6133 / 0.6158 / 0.6142 / 0.6156 / 0.6131`，最高只从 `61.45` 到 `61.58`，约 `+0.13 mAP` 点。
+
+该 run 的 SPCRA 分阶段日志已经把问题定位清楚：raw 与 finite 基本固定为 200；target-class `cls` 仍有几十到一百多个；但 `cls -> score/topk` 后大量样本直接归零。抽样诊断约为：clean `cls -> score` 只剩约 `1.04%`，perturbed `cls -> score` 只剩约 `0.50%`，perturbed `score/topk=0` 占约 `85.2%`。只要两侧都有有效 proposal，匹配率通常很好；因此当前不应继续收紧 matching。
+
+已完成的最新代码更新：
+
+- `pcdet/tta_methods/reliability.py`: SPCRA reliability 改为 effective-set coverage/support 语义，并支持 `RELIABILITY_CLAMP_MAX`，用于将 `rel_used` 和 per-box reliability cap 到默认 `0.20`；
+- `pcdet/tta_methods/reliability.py` / `pcdet/tta_methods/spcra_filter_utils.py`: SPCRA filtering 拆出 staged mask / top-k / reliability summary helper，并新增 `clean_rescue_boxes` / `perturbed_rescue_boxes` 统计；
+- `pcdet/tta_methods/mos.py`: 新增 camera-guided proposal rescue sidecar，从 `spatial_features_img` 在 proposal center 采样 image BEV feature，按帧内标准化 energy 得到 `camera_support`；开启 `TTA.SPCRA.CAMERA_RESCUE_ENABLED=True` 后，`score >= CAMERA_LOW_SCORE` 且 camera support 高的 target proposal 可绕过高 score threshold 进入 SPCRA；
+- `pcdet/models/backbones_2d/fuser/tta_fusion_adapter.py`: `RESIDUAL_SCALE_INIT` 改为 `0.1`，避免 residual last-layer zero-init 与 residual scale zero-init 的双零梯度死锁；
+- `pcdet/models/backbones_2d/fuser/tta_fusion_adapter_utils.py`: proposal geometry / residual stamping / adapter utility helper 已从 oversized adapter 文件拆出。
+
+当前拆分后的 LOC 状态：`reliability.py=203`、`spcra_filter_utils.py=95`、`tta_fusion_adapter.py=138`、`tta_fusion_adapter_utils.py=141`。新 helper 文件必须随代码同步：`pcdet/tta_methods/spcra_filter_utils.py` 与 `pcdet/models/backbones_2d/fuser/tta_fusion_adapter_utils.py`。若服务器运行时继续报 `NotFoundKey`，优先确认远程 `/data/zyt/OpenPCDet/tools/cfgs/nuscenes_models/bevfusion_mos.yaml` 是否已包含最新 SPCRA keys：`SUPPORT_TAU`、`RELIABILITY_CLAMP_MAX`、`CAMERA_RESCUE_ENABLED`、`CAMERA_LOW_SCORE`、`CAMERA_THRESH`、`CAMERA_SUPPORT_SCALE`。
+
+下一步 run 不跑 s7，先跑 `s5` 的 Camera rescue 最小版本，建议 tag：`full_spcra_cam_rescue_effrel_scale01_s5_2gpu`。核心观察项：SPCRA 日志中的 `score=... rescue=... topk=...`、`rel_used` 是否被 clamp 到 `<=0.20`、以及 perturbed `topk=0` 是否明显减少。若 rescue 没有明显增加 candidate 覆盖，再考虑调 `CAMERA_LOW_SCORE` / `CAMERA_THRESH`；若 candidate 增加但 mAP 不涨，再进入 instance reliability / SG-DFA gate 的下一轮，而不是继续堆阈值。
+
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 
 `fog_s3_conflict_probe` 已完成，用 `B_L / B_C / B_Fused` 做 forward-only 分析，结论是：

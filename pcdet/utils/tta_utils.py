@@ -232,6 +232,8 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
     new_img_aug_matrix_list = []
     new_lidar_aug_matrix_list = []
     new_tta_proposal_boxes_list = []
+    new_tta_pseudo_weights_list = []
+    new_tta_pseudo_reg_weights_list = []
 
     point_cloud_range = getattr(dataset, 'point_cloud_range', None)
     if point_cloud_range is None and cfg.get('DATA_CONFIG', None) is not None:
@@ -281,6 +283,18 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
         # 框 [M, ?] -> 统一到 10 列
         cur_boxes = target_batch['gt_boxes'][b_idx].cpu().numpy()
         cur_boxes = _ensure_gt_boxes_10_np(cur_boxes)
+
+        # 伪标签损失权重（标量，无需几何变换），与 gt_boxes 逐行对齐后原样回写
+        if 'tta_pseudo_weights' in target_batch:
+            cur_pseudo_weights = target_batch['tta_pseudo_weights'][b_idx]
+            if isinstance(cur_pseudo_weights, torch.Tensor):
+                cur_pseudo_weights = cur_pseudo_weights.detach().cpu().numpy()
+            new_tta_pseudo_weights_list.append(np.asarray(cur_pseudo_weights, dtype=np.float32))
+        if 'tta_pseudo_reg_weights' in target_batch:
+            cur_pseudo_reg_weights = target_batch['tta_pseudo_reg_weights'][b_idx]
+            if isinstance(cur_pseudo_reg_weights, torch.Tensor):
+                cur_pseudo_reg_weights = cur_pseudo_reg_weights.detach().cpu().numpy()
+            new_tta_pseudo_reg_weights_list.append(np.asarray(cur_pseudo_reg_weights, dtype=np.float32))
 
         # 构造增强器需要的单样本输入
         single_dict = {
@@ -392,6 +406,15 @@ def TTA_augmentation(dataset, target_batch, strength='mid'):
     # 8) 合并全 Batch 数据
     target_batch['points'] = torch.cat(new_points_list, dim=0)
     target_batch['gt_boxes'] = torch.stack(new_gt_boxes_list, dim=0)
+
+    if len(new_tta_pseudo_weights_list) > 0:
+        target_batch['tta_pseudo_weights'] = torch.stack(
+            [torch.from_numpy(w).float().cuda() for w in new_tta_pseudo_weights_list], dim=0
+        )
+    if len(new_tta_pseudo_reg_weights_list) > 0:
+        target_batch['tta_pseudo_reg_weights'] = torch.stack(
+            [torch.from_numpy(w).float().cuda() for w in new_tta_pseudo_reg_weights_list], dim=0
+        )
 
     # ✅合并增强后的图像（如果存在）
     if len(new_images_list) > 0:

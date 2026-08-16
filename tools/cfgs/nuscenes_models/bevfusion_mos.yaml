@@ -211,9 +211,16 @@ MODEL:
                     'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
                 }
             LOSS_CLS:
+                NAME: sigmoid_focal
                 use_sigmoid: True
                 gamma: 2.0
                 alpha: 0.25
+                EFL_BETA: 0.75
+                EFL_TAU: 0.5
+                EFL_MOMENTUM: 0.9
+                EFL_MIN_WEIGHT: 0.25
+                EFL_MAX_WEIGHT: 2.0
+            PSEUDO_WEIGHT_REG: True
         POST_PROCESSING:
             SCORE_THRESH: 0.0
             POST_CENTER_RANGE: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
@@ -311,6 +318,26 @@ SELF_TRAIN:
     # 方案A（已固化）：S1 最优阈值，仅收紧 traffic_cone；其余类别回到安全版
     SCORE_THRESH: [0.28, 0.28, 0.28, 0.20, 0.20, 0.24, 0.20, 0.18, 0.24, 0.34]
     NEG_THRESH: [0.08, 0.08, 0.09, 0.05, 0.05, 0.06, 0.06, 0.05, 0.10, 0.14]
+
+    # HINTED-style hard pseudo mining: rescue supported medium-score pseudo labels
+    # with fractional loss weights. Disabled by default; HIGH defaults to
+    # SELF_TRAIN.SCORE_THRESH and LOW defaults to SELF_TRAIN.NEG_THRESH per class.
+    HARD_PSEUDO_MINING:
+        ENABLED: False
+        TARGET_CLASSES: ['construction_vehicle', 'trailer', 'bicycle', 'truck']
+        HIGH_THRESH:
+            construction_vehicle: 0.30
+            trailer: 0.30
+            bicycle: 0.30
+            truck: 0.30
+        LOW_THRESH:
+            construction_vehicle: 0.10
+            trailer: 0.10
+            bicycle: 0.10
+            truck: 0.10
+        MEDIUM_WEIGHT: 0.3
+        MEDIUM_REG_WEIGHT: 0.1
+        SUPPORT_THRESH: 0.05
 
     # A11: 前置伪标签质量过滤（按类别 Top-K 限流）
     PS_FILTER:
