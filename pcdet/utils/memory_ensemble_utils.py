@@ -15,7 +15,9 @@ def _reliability_weights(gt_infos, size):
 
 
 def _pseudo_loss_weights(gt_infos, size):
-    weights = gt_infos.get('pseudo_loss_weights', None)
+    weights = gt_infos.get('pseudo_cls_weights', None)
+    if weights is None:
+        weights = gt_infos.get('pseudo_loss_weights', None)
     if weights is None or len(weights) != size:
         return np.ones(size, dtype=np.float32)
     return np.asarray(weights, dtype=np.float32)
@@ -346,6 +348,8 @@ def memory_ensemble(gt_infos_a, gt_infos_b, memory_ensemble_cfg, ensemble_func):
     gt_infos_b['reliability_weights'] = _reliability_weights(gt_infos_b, gt_infos_b['gt_boxes'].shape[0])
     gt_infos_a['pseudo_loss_weights'] = _pseudo_loss_weights(gt_infos_a, gt_infos_a['gt_boxes'].shape[0])
     gt_infos_b['pseudo_loss_weights'] = _pseudo_loss_weights(gt_infos_b, gt_infos_b['gt_boxes'].shape[0])
+    gt_infos_a['pseudo_cls_weights'] = gt_infos_a['pseudo_loss_weights']
+    gt_infos_b['pseudo_cls_weights'] = gt_infos_b['pseudo_loss_weights']
     gt_infos_a['pseudo_reg_weights'] = _pseudo_reg_weights(gt_infos_a, gt_infos_a['gt_boxes'].shape[0])
     gt_infos_b['pseudo_reg_weights'] = _pseudo_reg_weights(gt_infos_b, gt_infos_b['gt_boxes'].shape[0])
     classes_a = np.unique(np.abs(gt_infos_a['gt_boxes'][:, -2]))
