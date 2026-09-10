@@ -9,7 +9,7 @@ from pcdet.tta_methods.tent_utils import (
     clone_named_parameters,
     configure_model_for_tent,
 )
-from tools.eval_utils.tent_eval_utils import _tent_step_indices
+from tools.eval_utils.tent_eval_utils import _tent_step_indices, _tent_updates_enabled
 
 
 class DummyCfg(dict):
@@ -108,3 +108,10 @@ def test_zero_tent_steps_skips_optimizer_update():
         optimizer.zero_grad()
 
     assert changed_parameter_names(before, model) == []
+
+
+def test_zero_tent_steps_disable_grad_updates():
+    assert _tent_updates_enabled(0) is False
+    assert list(_tent_step_indices(0)) == []
+    assert _tent_updates_enabled(1) is True
+    assert list(_tent_step_indices(1)) == [0]

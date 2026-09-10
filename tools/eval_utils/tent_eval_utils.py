@@ -62,6 +62,10 @@ def _tent_step_indices(steps):
     return range(max(int(steps), 0))
 
 
+def _tent_updates_enabled(steps):
+    return int(steps) > 0
+
+
 def _log_param_debug(logger, before_params, model, trainable_names):
     changed = changed_parameter_names(before_params, model)
     illegal_changed = [name for name in changed if name not in set(trainable_names)]
@@ -125,8 +129,12 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
         before_params = clone_named_parameters(model) if debug_param_check and i == 0 else None
         grad_norm_value = 0.0
 
-        optimizer.zero_grad()
-        with torch.enable_grad():
+        updates_enabled = _tent_updates_enabled(steps)
+        grad_context = torch.enable_grad() if updates_enabled else torch.no_grad()
+        if updates_enabled:
+            optimizer.zero_grad()
+
+        with grad_context:
             with TransFusionLogitCapture(model) as capture:
                 pred_dicts, ret_dict = model(batch_dict)
             pred_dicts_for_eval = _detach_tensor_tree(pred_dicts)
@@ -137,6 +145,13 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
 
             loss = None
             loss_diag = {'valid_terms': 0, 'finite': False, 'shape': None, 'mode': tent_cfg.get('ENTROPY_MODE', 'auto')}
+            if not updates_enabled:
+                loss, loss_diag = entropy_loss_from_logits(
+                    capture.logits,
+                    entropy_mode=tent_cfg.get('ENTROPY_MODE', 'auto'),
+                    min_valid_terms=min_valid_terms,
+                    use_sigmoid=use_sigmoid,
+                )
             for _ in _tent_step_indices(steps):
                 loss, loss_diag = entropy_loss_from_logits(
                     capture.logits,
