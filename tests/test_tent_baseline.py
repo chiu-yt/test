@@ -9,6 +9,7 @@ from pcdet.tta_methods.tent_utils import (
     clone_named_parameters,
     configure_model_for_tent,
 )
+from tools.eval_utils.tent_eval_utils import _tent_step_indices
 
 
 class DummyCfg(dict):
@@ -90,3 +91,20 @@ def test_tent_step_changes_only_bn_affine_params():
     changed = changed_parameter_names(before, model)
     assert changed
     assert set(changed).issubset(set(names))
+
+
+def test_zero_tent_steps_skips_optimizer_update():
+    model = TinyTentModel()
+    params, _, _, _, _ = configure_model_for_tent(model, DummyCfg())
+    optimizer = build_tent_optimizer(params, DummyCfg({'LR': 1e-2, 'WEIGHT_DECAY': 0.0}))
+    before = clone_named_parameters(model)
+
+    for _ in _tent_step_indices(0):
+        outputs = model(torch.randn(2, 3, 4, 4))
+        loss, diag = entropy_loss_from_logits(outputs[:, :, None], entropy_mode='softmax', use_sigmoid=False)
+        assert loss is not None and diag['finite'] is True
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+    assert changed_parameter_names(before, model) == []

@@ -58,6 +58,10 @@ def _grad_norm(parameters):
     return float(total.sqrt().item())
 
 
+def _tent_step_indices(steps):
+    return range(max(int(steps), 0))
+
+
 def _log_param_debug(logger, before_params, model, trainable_names):
     changed = changed_parameter_names(before_params, model)
     illegal_changed = [name for name in changed if name not in set(trainable_names)]
@@ -133,7 +137,7 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
 
             loss = None
             loss_diag = {'valid_terms': 0, 'finite': False, 'shape': None, 'mode': tent_cfg.get('ENTROPY_MODE', 'auto')}
-            for _ in range(max(steps, 1)):
+            for _ in _tent_step_indices(steps):
                 loss, loss_diag = entropy_loss_from_logits(
                     capture.logits,
                     entropy_mode=tent_cfg.get('ENTROPY_MODE', 'auto'),
