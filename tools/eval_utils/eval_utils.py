@@ -71,6 +71,18 @@ def statistics_info(cfg, ret_dict, metric, disp_dict):
 
 
 def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=False, result_dir=None):
+    if (
+        cfg.get('TTA', None)
+        and bool(cfg.TTA.get('ENABLED', False))
+        and str(cfg.TTA.get('METHOD', '')).lower() == 'tent'
+        and bool(cfg.TTA.get('TENT', {}).get('ENABLED', False))
+    ):
+        from eval_utils import tent_eval_utils
+        return tent_eval_utils.eval_tent_one_epoch(
+            cfg, args, model, dataloader, epoch_id, logger,
+            dist_test=dist_test, result_dir=result_dir
+        )
+
     result_dir.mkdir(parents=True, exist_ok=True)
 
     final_output_dir = result_dir / 'final_result' / 'data'
