@@ -87,7 +87,7 @@
 | `normal_shift_b0_lidar_sparsity_s5` | 0.6148 | 0.6545 | -0.0271 | -0.0190 |
 | `normal_shift_b0_lidar_sparsity_s7` | 0.6157 | 0.6557 | -0.0262 | -0.0178 |
 
-结论：`s7` 没有比 `s5` 更强，继续加 severity 暂无意义；当前最合适的临界场景仍是 `lidar_sparsity_s5/s7`。下一步不再调 severity，而是直接进入 BEVFusion TTA 临界测试：先跑 `B2 = fix_nan + F1 freeze + no aggregation`，若相对 B0 不能稳定恢复至少 `0.8 mAP` 或 `0.5 NDS`，则触发止损，转向 `CodeMerge-style head merging`、`small adapter` 或更换多模态基线。
+结论：`s7` 没有比 `s5` 更强，继续加 severity 暂无意义；后续代码复核进一步确认，当前 root `LIDAR_SPARSITY` 会把 severity clip 到 `1..5`，因此 `s6/s7` 实际等价于 `s5`，不能再作为更强 severity 解释。当前最合适的临界场景应写为 `lidar_sparsity_s5`。下一步不再调 severity，而是直接进入 BEVFusion TTA 临界测试：先跑 `B2 = fix_nan + F1 freeze + no aggregation`，若相对 B0 不能稳定恢复至少 `0.8 mAP` 或 `0.5 NDS`，则触发止损，转向 `CodeMerge-style head merging`、`small adapter` 或更换多模态基线。
 
 ### 0.0.3 2026-06 Qwen-style gate 与 DPO 判断
 
@@ -122,7 +122,7 @@ DPO 代码位于 `/home/zyt/code/DPO-main`，官方实现基于旧 OpenPCDet/ST3
 正式全模块 run 命名建议：
 
 - `full_spcra_rgplm_sgdfa_s5_2gpu`: 若继续沿此前 B0/B2 s5 主对照；
-- `full_spcra_rgplm_sgdfa_s7_2gpu`: 若要与已归档的 `normal_shift_b2_lidar_sparsity_s7_noagg` 对齐。
+- `full_spcra_rgplm_sgdfa_s7_2gpu`: 仅作为历史 tag 对齐保留；当前实现会将 `s7` clip 为 `s5`，不再建议新增运行。
 
 `TTA.MOS_SETTING.AGGREGATE_START_CKPT 999999` 的作用是推迟/禁用 checkpoint aggregation，避免当前主模块效果被 MOS checkpoint merging 混入。第一轮正式全开应先保持 no-aggregation；消融阶段再单独评估 aggregation。
 
@@ -143,6 +143,22 @@ DPO 代码位于 `/home/zyt/code/DPO-main`，官方实现基于旧 OpenPCDet/ST3
 当前拆分后的 LOC 状态：`reliability.py=203`、`spcra_filter_utils.py=95`、`tta_fusion_adapter.py=138`、`tta_fusion_adapter_utils.py=141`。新 helper 文件必须随代码同步：`pcdet/tta_methods/spcra_filter_utils.py` 与 `pcdet/models/backbones_2d/fuser/tta_fusion_adapter_utils.py`。若服务器运行时继续报 `NotFoundKey`，优先确认远程 `/data/zyt/OpenPCDet/tools/cfgs/nuscenes_models/bevfusion_mos.yaml` 是否已包含最新 SPCRA keys：`SUPPORT_TAU`、`RELIABILITY_CLAMP_MAX`、`CAMERA_RESCUE_ENABLED`、`CAMERA_LOW_SCORE`、`CAMERA_THRESH`、`CAMERA_SUPPORT_SCALE`。
 
 下一步 run 不跑 s7，先跑 `s5` 的 Camera rescue 最小版本，建议 tag：`full_spcra_cam_rescue_effrel_scale01_s5_2gpu`。核心观察项：SPCRA 日志中的 `score=... rescue=... topk=...`、`rel_used` 是否被 clamp 到 `<=0.20`、以及 perturbed `topk=0` 是否明显减少。若 rescue 没有明显增加 candidate 覆盖，再考虑调 `CAMERA_LOW_SCORE` / `CAMERA_THRESH`；若 candidate 增加但 mAP 不涨，再进入 instance reliability / SG-DFA gate 的下一轮，而不是继续堆阈值。
+
+### 0.0.6 2026-09 LiDAR sparsity 协议复核
+
+对 root `OpenPCDet` 与 `/home/zyt/code/3D_Corruptions_AD` 的 LiDAR density decrease 实现做了复核，当前结论如下：
+
+- root `pcdet/datasets/augmentor/augmentor_utils.py::apply_lidar_sparsity()` 当前是项目内手写的 normal-shift `random_keep`：severity `1..5` 分别保留 `90%/80%/70%/60%/50%` 点，并轻微缩放 intensity；
+- 该实现会 `np.clip(severity, 1, 5)`，所以历史命令中的 `LIDAR_SPARSITY.SEVERITY 7` 实际按 `s5` 执行；此前 `s7` 结果只能作为历史 tag 保留，论文中不应解释为比 `s5` 更强的 severity；
+- `3D_Corruptions_AD` 官方 `density_dec_global` 的核心公式是先取 `num=int(N*0.3)`，再按 severity 删除 `0.2/0.4/0.6/0.8/1.0 * num`，即实际删除约 `6%/12%/18%/24%/30%` 点；这与当前 root `s5` 删除 `50%` 点不一致；
+- 历史 `random_keep` 实验仍只能保守描述为“project-defined sparse-LiDAR normal shift”。root 现已新增 `LIDAR_SPARSITY.MODE=density_dec_global`；只有按该模式重跑的结果才能写为“following the 3D_Corruptions_AD LiDAR density-decrease protocol”；
+- 不建议写“official nuScenes-C”或“official corruption benchmark”，除非完整接入对应官方生成流程、配置与评测协议。更稳妥的措辞是：`We implement LiDAR density decrease following the 3D_Corruptions_AD density_dec_global protocol.`
+
+该代码更新已完成：`apply_lidar_sparsity()` 保留 `random_keep` 作为 stronger ablation，并新增 `density_dec_global`；`nuscenes_dataset.py` 按配置分派模式，基础 YAML 默认保持 `random_keep`，正式论文 baseline 配置使用 `density_dec_global`。后续主表须按新协议重跑，不再新增 `s7` 计划。
+
+### 0.0.7 2026-09 SAR baseline 实现与待运行状态
+
+SAR 已完成实现与静态审查，但真实 GPU sanity/full-val 尚未运行。SAR 及后续所有 BEVFusion baseline 的复现命令、协议状态、诊断和结果统一维护在 [`bevfusion_baseline_reproduction_registry.md`](docs/guidelines_of_approaches/bevfusion_baseline_reproduction_registry.md)；本实验记录不再重复维护 baseline 对比细节。
 
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 

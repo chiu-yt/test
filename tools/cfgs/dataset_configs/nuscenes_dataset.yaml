@@ -34,6 +34,7 @@ CORRUPTION:
     LIDAR_SPARSITY:
         ENABLED: False
         SEVERITY: 1
+        MODE: random_keep
     IMAGE_STYLE:
         ENABLED: False
         SEVERITY: 1

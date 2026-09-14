@@ -74,11 +74,59 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
     if (
         cfg.get('TTA', None)
         and bool(cfg.TTA.get('ENABLED', False))
+        and str(cfg.TTA.get('METHOD', '')).lower() == 'reg_tta3d'
+        and bool(cfg.TTA.get('REG_TTA3D', {}).get('ENABLED', False))
+    ):
+        from eval_utils import reg_tta3d_eval_utils
+        return reg_tta3d_eval_utils.eval_reg_tta3d_one_epoch(
+            cfg, args, model, dataloader, epoch_id, logger,
+            dist_test=dist_test, result_dir=result_dir
+        )
+
+    if (
+        cfg.get('TTA', None)
+        and bool(cfg.TTA.get('ENABLED', False))
+        and str(cfg.TTA.get('METHOD', '')).lower() == 'dpo_bevfusion'
+        and bool(cfg.TTA.get('DPO_BEVFUSION', {}).get('ENABLED', False))
+    ):
+        from eval_utils import dpo_bevfusion_eval_utils
+        return dpo_bevfusion_eval_utils.eval_dpo_bevfusion_one_epoch(
+            cfg, args, model, dataloader, epoch_id, logger,
+            dist_test=dist_test, result_dir=result_dir
+        )
+
+    if (
+        cfg.get('TTA', None)
+        and bool(cfg.TTA.get('ENABLED', False))
+        and str(cfg.TTA.get('METHOD', '')).lower() == 'cotta'
+        and bool(cfg.TTA.get('COTTA', {}).get('ENABLED', False))
+    ):
+        from eval_utils import cotta_eval_utils
+        return cotta_eval_utils.eval_cotta_one_epoch(
+            cfg, args, model, dataloader, epoch_id, logger,
+            dist_test=dist_test, result_dir=result_dir
+        )
+
+    if (
+        cfg.get('TTA', None)
+        and bool(cfg.TTA.get('ENABLED', False))
         and str(cfg.TTA.get('METHOD', '')).lower() == 'tent'
         and bool(cfg.TTA.get('TENT', {}).get('ENABLED', False))
     ):
         from eval_utils import tent_eval_utils
         return tent_eval_utils.eval_tent_one_epoch(
+            cfg, args, model, dataloader, epoch_id, logger,
+            dist_test=dist_test, result_dir=result_dir
+        )
+
+    if (
+        cfg.get('TTA', None)
+        and bool(cfg.TTA.get('ENABLED', False))
+        and str(cfg.TTA.get('METHOD', '')).lower() == 'sar'
+        and bool(cfg.TTA.get('SAR', {}).get('ENABLED', False))
+    ):
+        from eval_utils import sar_eval_utils
+        return sar_eval_utils.eval_sar_one_epoch(
             cfg, args, model, dataloader, epoch_id, logger,
             dist_test=dist_test, result_dir=result_dir
         )

@@ -1,0 +1,131 @@
+# Independent DPO-BEVFusion baseline for density_dec_global sparse-LiDAR S5
+# with clean camera. The paper profile is the canonical Table 1 setting.
+_BASE_CONFIG_: cfgs/nuscenes_models/bevfusion.yaml
+
+DATA_CONFIG:
+    _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
+    CAMERA_CONFIG:
+        USE_CAMERA: True
+        IMAGE:
+            FINAL_DIM: [256,704]
+            RESIZE_LIM_TRAIN: [0.38, 0.55]
+            RESIZE_LIM_TEST: [0.48, 0.48]
+    DATA_SPLIT:
+        train: val
+        test: val
+    INFO_PATH:
+        train: [nuscenes_infos_10sweeps_val.pkl]
+        test: [nuscenes_infos_10sweeps_val.pkl]
+    BALANCED_RESAMPLING: False
+    POINT_CLOUD_RANGE: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+    CORRUPTION:
+        ENABLED: True
+        APPLY_IN: ['test']
+        LIDAR_FOG:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_FOG:
+            ENABLED: False
+            SEVERITY: 1
+        LIDAR_SPARSITY:
+            ENABLED: True
+            SEVERITY: 5
+            MODE: density_dec_global
+            SEED: 1024
+        IMAGE_STYLE:
+            ENABLED: False
+            SEVERITY: 1
+        IMAGE_GEOMETRY:
+            ENABLED: False
+            SEVERITY: 1
+    DATA_PROCESSOR:
+        - NAME: mask_points_and_boxes_outside_range
+          REMOVE_OUTSIDE_BOXES: True
+        - NAME: shuffle_points
+          SHUFFLE_ENABLED:
+            train: True
+            test: False
+        - NAME: transform_points_to_voxels
+          VOXEL_SIZE: [0.075, 0.075, 0.2]
+          MAX_POINTS_PER_VOXEL: 10
+          MAX_NUMBER_OF_VOXELS:
+            train: 120000
+            test: 160000
+        - NAME: image_calibrate
+        - NAME: image_normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+
+MODEL:
+    TTA_FUSION_ADAPTER:
+        ENABLED: False
+        SG_DFA:
+            ENABLED: False
+    FORWARD_ONLY_CONFLICT_ANALYSIS:
+        ENABLED: False
+    FORWARD_ONLY_GEOMETRY_ANALYSIS:
+        ENABLED: False
+    DEPTH_ENTROPY_ANALYSIS:
+        ENABLED: False
+    POST_PROCESSING:
+        EVAL_METRIC: nuscenes
+
+OPTIMIZATION:
+    BATCH_SIZE_PER_GPU: 2
+
+TTA:
+    ENABLED: True
+    METHOD: dpo_bevfusion
+    ONLINE: True
+    STEPS_PER_BATCH: 1
+
+    TENT:
+        ENABLED: False
+    COTTA:
+        ENABLED: False
+    SAR:
+        ENABLED: False
+    FREEZE:
+        ENABLED: False
+    DPO_MATCHER:
+        ENABLED: False
+    SPCRA:
+        ENABLED: False
+
+    DPO_BEVFUSION:
+        ENABLED: True
+        STEPS: 1
+        PROFILE: dpo_paper
+        PROFILES:
+            DPO_PAPER:
+                UPDATE_SCOPE: full
+                OPTIMIZER: SGD
+                LR: 0.001
+                MOMENTUM: 0.9
+                WEIGHT_DECAY: 0.0
+                RHO_W: 0.0001
+                RHO_Z: 0.0001
+                ALPHA: 0.08
+                SCORE_THRESH: 0.5
+                NEG_THRESH: 0.2
+                SCORE_THRESHOLDS: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+                NEG_THRESHOLDS: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+                GAMMA: 0.5
+                CUTOFF_ENABLED: False
+                C_STOP: null
+            DPO_REPO:
+                UPDATE_SCOPE: bn_affine
+                OPTIMIZER: SGD
+                LR: 0.0005
+                MOMENTUM: 0.9
+                WEIGHT_DECAY: 0.01
+                RHO_W: 0.001
+                RHO_Z: 0.01
+                ALPHA: 0.05
+                SCORE_THRESH: 0.5
+                NEG_THRESH: 0.2
+                SCORE_THRESHOLDS: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+                NEG_THRESHOLDS: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2]
+                GAMMA: 0.5
+                CUTOFF_ENABLED: False
+                C_STOP: null

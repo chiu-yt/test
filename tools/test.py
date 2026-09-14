@@ -2,6 +2,7 @@ import _init_path
 import argparse
 import datetime
 import glob
+import numbers
 import os
 import re
 import time
@@ -97,6 +98,30 @@ def get_no_evaluated_ckpt(ckpt_dir, ckpt_record_file, args):
     return -1, None
 
 
+def _iter_tb_scalar_metrics(metrics):
+    """Yield (key, value) pairs that are safe to write as TensorBoard scalars.
+
+    Evaluators may return structured SAR metadata alongside numeric metrics.
+    Only real numeric scalars (Python int/float, numpy scalar numbers, and
+    zero-dimensional numeric tensors/arrays) are yielded; bools, lists, dicts,
+    tuples, strings, and other non-scalar objects are silently skipped.
+    """
+    for key, value in metrics.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, numbers.Real):
+            yield key, float(value)
+            continue
+        if getattr(value, 'ndim', None) == 0:
+            try:
+                scalar_value = value.item()
+            except (TypeError, ValueError):
+                continue
+            if isinstance(scalar_value, bool) or not isinstance(scalar_value, numbers.Real):
+                continue
+            yield key, float(scalar_value)
+
+
 def repeat_eval_ckpt(model, test_loader, args, eval_output_dir, logger, ckpt_dir, dist_test=False):
     ckpt_type = getattr(args, 'eval_ckpt_type', 'epoch')
 
@@ -140,7 +165,7 @@ def repeat_eval_ckpt(model, test_loader, args, eval_output_dir, logger, ckpt_dir
         )
 
         if cfg.LOCAL_RANK == 0 and tb_log is not None:
-            for key, val in tb_dict.items():
+            for key, val in _iter_tb_scalar_metrics(tb_dict):
                 tb_log.add_scalar(key, val, cur_ckpt_id)
 
         # record this epoch which has been evaluated

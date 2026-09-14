@@ -116,16 +116,31 @@ def apply_image_style(images, severity=1):
     return [apply_image_style_single(img, severity=severity) for img in images]
 
 
-def apply_lidar_sparsity(points, severity=1, rng=None):
+def apply_lidar_sparsity(points, severity=1, rng=None, mode='random_keep'):
     """
-    Mild normal-scene LiDAR sparsity shift for deployment mismatch simulation.
-    Keeps geometry intact while reducing density and slightly perturbing intensity.
+    LiDAR sparsity shift for deployment mismatch simulation.
+
+    ``random_keep`` keeps a severity-dependent random subset of points and
+    slightly perturbs intensity (legacy behavior). ``density_dec_global``
+    follows the official nuScenes-C density-decrease protocol: it drops a
+    severity-dependent fraction of complete point rows without touching
+    intensity.
     """
     if points is None or len(points) == 0:
         return points
 
     severity = int(np.clip(severity, 1, 5))
     rng = np.random if rng is None else rng
+
+    if mode == 'density_dec_global':
+        drop_ratio = [0.06, 0.12, 0.18, 0.24, 0.30][severity - 1]
+        keep_count = points.shape[0] - int(points.shape[0] * drop_ratio)
+        keep_idx = rng.choice(points.shape[0], size=keep_count, replace=False)
+        return points[keep_idx].astype(points.dtype, copy=False)
+
+    if mode != 'random_keep':
+        raise ValueError('Unknown lidar sparsity mode: %s' % mode)
+
     keep_ratio = [0.90, 0.80, 0.70, 0.60, 0.50][severity - 1]
 
     pts = points.copy()

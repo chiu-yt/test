@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import pickle
 from pathlib import Path
 
@@ -11,6 +12,12 @@ from ..augmentor import augmentor_utils
 from ..dataset import DatasetTemplate
 from pyquaternion import Quaternion
 from PIL import Image
+
+
+def _build_lidar_corruption_rng(sample_id, seed):
+    seed_material = ('%d:%s' % (int(seed), sample_id)).encode('utf-8')
+    digest = hashlib.sha256(seed_material).digest()
+    return np.random.RandomState(int.from_bytes(digest[:4], byteorder='little'))
 
 
 class NuScenesDataset(DatasetTemplate):
@@ -283,7 +290,15 @@ class NuScenesDataset(DatasetTemplate):
             points = augmentor_utils.apply_lidar_fog(points, severity=severity)
         if self._use_corruption() and self.lidar_sparsity_cfg.get('ENABLED', False):
             severity = int(self.lidar_sparsity_cfg.get('SEVERITY', 1))
-            points = augmentor_utils.apply_lidar_sparsity(points, severity=severity)
+            sparsity_mode = self.lidar_sparsity_cfg.get('MODE', 'random_keep')
+            sparsity_rng = None
+            if sparsity_mode == 'density_dec_global':
+                sample_id = info.get('token', Path(info['lidar_path']).stem)
+                seed = int(self.lidar_sparsity_cfg.get('SEED', 0))
+                sparsity_rng = _build_lidar_corruption_rng(sample_id, seed)
+            points = augmentor_utils.apply_lidar_sparsity(
+                points, severity=severity, rng=sparsity_rng, mode=sparsity_mode
+            )
 
         input_dict = {
             'points': points,

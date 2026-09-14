@@ -1,9 +1,8 @@
-_BASE_CONFIG_: cfgs/nuscenes_models/bevfusion_mos.yaml
-
-MODEL:
-    IMAGE_BACKBONE:
-        INIT_CFG:
-            checkpoint: /home/zyt/OpenPCDet/pretrained/swint-nuimages-pretrained.pth
+# Independent SAR baseline following 3D_Corruptions_AD density_dec_global S5
+# (sparse LiDAR + clean camera), not the packaged nuScenes-C data pipeline.
+# Bases on the neutral BEVFusion config (not MOS/Tent) so no MOS or SELF_TRAIN
+# surface is inherited, and selects the standalone SAR evaluator.
+_BASE_CONFIG_: cfgs/nuscenes_models/bevfusion.yaml
 
 DATA_CONFIG:
     _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
@@ -25,7 +24,7 @@ DATA_CONFIG:
     POINT_CLOUD_RANGE: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
     CORRUPTION:
         ENABLED: True
-        APPLY_IN: ['train', 'test']
+        APPLY_IN: ['test']
         LIDAR_FOG:
             ENABLED: False
             SEVERITY: 1
@@ -33,8 +32,10 @@ DATA_CONFIG:
             ENABLED: False
             SEVERITY: 1
         LIDAR_SPARSITY:
-            ENABLED: False
-            SEVERITY: 1
+            ENABLED: True
+            SEVERITY: 5
+            MODE: density_dec_global
+            SEED: 1024
         IMAGE_STYLE:
             ENABLED: False
             SEVERITY: 1
@@ -61,24 +62,52 @@ DATA_CONFIG:
           mean: [0.485, 0.456, 0.406]
           std: [0.229, 0.224, 0.225]
 
-DATA_CONFIG_TAR:
-    TTA_DATA_AUGMENTOR:
-        DISABLE_AUG_LIST: ['placeholder']
-        AUG_CONFIG_LIST:
-            - NAME: random_world_flip
-              ALONG_AXIS_LIST: ['x', 'y']
-            - NAME: random_world_rotation
-              WORLD_ROT_ANGLE: [-0.78539816, 0.78539816]
-            - NAME: random_world_scaling
-              WORLD_SCALE_RANGE: [0.9, 1.1]
-            - NAME: random_world_translation
-              NOISE_TRANSLATE_STD: [0.5, 0.5, 0.5]
-            - NAME: imgaug
-              ROT_LIM: [-5.4, 5.4]
-              RAND_FLIP: True
+MODEL:
+    TTA_FUSION_ADAPTER:
+        ENABLED: False
+        SG_DFA:
+            ENABLED: False
+    FORWARD_ONLY_CONFLICT_ANALYSIS:
+        ENABLED: False
+    FORWARD_ONLY_GEOMETRY_ANALYSIS:
+        ENABLED: False
+    DEPTH_ENTROPY_ANALYSIS:
+        ENABLED: False
+    POST_PROCESSING:
+        EVAL_METRIC: nuscenes
+
+OPTIMIZATION:
+    BATCH_SIZE_PER_GPU: 2
 
 TTA:
-    METHOD: codemerge
+    ENABLED: True
+    METHOD: sar
+    ONLINE: True
+    STEPS_PER_BATCH: 1
+
+    TENT:
+        ENABLED: False
+
+    COTTA:
+        ENABLED: False
+
+    SAR:
+        ENABLED: True
+        OPTIMIZER: SGD
+        LR: 0.00025
+        MOMENTUM: 0.9
+        WEIGHT_DECAY: 0.0
+        RHO: 0.05
+        ADAPTIVE_SAM: False
+        RELIABLE_MARGIN_NORM: 0.4
+        EMA_MOMENTUM: 0.9
+        RECOVERY: True
+        RECOVERY_THRESHOLD_NORM: 0.02895
+        # dense_head.predict()["heatmap"]: post-decoder pre-NMS proposal classification logits.
+        ENTROPY_SOURCE: transfusion_dense_head_heatmap
+        ENTROPY_MODE: auto
+        EPISODIC: False
+        STEPS: 1
 
     FREEZE:
         ENABLED: False
@@ -86,39 +115,5 @@ TTA:
     DPO_MATCHER:
         ENABLED: False
 
-    MOS_SETTING:
-        AGGREGATE_START_CKPT: 10
-
-    CODEMERGE_SETTING:
-        SELECT_TOPK: 5
-        RIDGE_DAMPING: 0.001
-        MERGE_SCALE: 0.85
-        LOG_INTERVAL: 50
-
-SELF_TRAIN:
-    DEPTH_FILTER:
-        ENABLED: False
-
-    DEPTH_ENTROPY_FILTER:
-        ENABLED: False
-
-    GEOMETRY_FILTER:
-        ENABLED: False
-
-    CONFLICT_FILTER:
-        ENABLED: False
-
-    MEMORY_ENSEMBLE:
-        ENABLED: False
-
-    RG_PLM:
-        ENABLED: False
-
-    HARD_PSEUDO_MINING:
-        ENABLED: False
-
-    PS_FILTER:
-        ENABLED: False
-
-    ADAPTIVE_CAP:
+    SPCRA:
         ENABLED: False

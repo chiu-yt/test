@@ -235,6 +235,10 @@ class TransFusionHead(nn.Module):
     def forward(self, batch_dict):
         feats = batch_dict['spatial_features_2d']
         res = self.predict(feats)
+        if batch_dict.get('reg_tta3d_capture_queries', False):
+            batch_dict['reg_tta3d_query_predictions'] = {
+                key: value.detach().clone() for key, value in res.items()
+            }
         if not self.training:
             bboxes = self.get_bboxes(res)
             batch_dict['final_box_dicts'] = bboxes
@@ -244,16 +248,18 @@ class TransFusionHead(nn.Module):
             gt_labels_3d =  gt_boxes[...,-1].long() - 1
             pseudo_weights = batch_dict.get('tta_pseudo_weights', None)
             pseudo_reg_weights = batch_dict.get('tta_pseudo_reg_weights', None)
+            pseudo_actions = batch_dict.get('tta_pseudo_actions', None)
             loss, tb_dict = self.loss(
                 gt_bboxes_3d, gt_labels_3d, res,
                 pseudo_weights=pseudo_weights,
                 pseudo_reg_weights=pseudo_reg_weights,
+                pseudo_actions=pseudo_actions,
             )
             batch_dict['loss'] = loss
             batch_dict['tb_dict'] = tb_dict
         return batch_dict
 
-    def get_targets(self, gt_bboxes_3d, gt_labels_3d, pred_dicts, pseudo_weights=None, pseudo_reg_weights=None):
+    def get_targets(self, gt_bboxes_3d, gt_labels_3d, pred_dicts, pseudo_weights=None, pseudo_reg_weights=None, pseudo_actions=None):
         assign_results = []
         for batch_idx in range(len(gt_bboxes_3d)):
             pred_dict = {}
@@ -278,10 +284,14 @@ class TransFusionHead(nn.Module):
             gt_pseudo_reg_weights = None
             if pseudo_reg_weights is not None:
                 gt_pseudo_reg_weights = pseudo_reg_weights[batch_idx][valid_idx]
+            gt_pseudo_actions = None
+            if pseudo_actions is not None:
+                gt_pseudo_actions = pseudo_actions[batch_idx][valid_idx]
             assign_result = self.get_targets_single(
                 gt_bboxes[valid_idx], gt_labels_3d[batch_idx][valid_idx], pred_dict,
                 pseudo_weights=gt_pseudo_weights,
                 pseudo_reg_weights=gt_pseudo_reg_weights,
+                pseudo_actions=gt_pseudo_actions,
             )
             assign_results.append(assign_result)
 
@@ -296,7 +306,7 @@ class TransFusionHead(nn.Module):
         return labels, label_weights, bbox_targets, bbox_weights, num_pos, matched_ious, heatmap
         
 
-    def get_targets_single(self, gt_bboxes_3d, gt_labels_3d, preds_dict, pseudo_weights=None, pseudo_reg_weights=None):
+    def get_targets_single(self, gt_bboxes_3d, gt_labels_3d, preds_dict, pseudo_weights=None, pseudo_reg_weights=None, pseudo_actions=None):
         
         num_proposals = preds_dict["center"].shape[-1]
         score = copy.deepcopy(preds_dict["heatmap"].detach())
@@ -342,6 +352,10 @@ class TransFusionHead(nn.Module):
         pos_inds = torch.nonzero(assigned_gt_inds > 0, as_tuple=False).squeeze(-1).unique()
         neg_inds = torch.nonzero(assigned_gt_inds == 0, as_tuple=False).squeeze(-1).unique()
         pos_assigned_gt_inds = assigned_gt_inds[pos_inds] - 1
+        if pseudo_actions is None:
+            pseudo_actions = gt_labels_3d.new_ones(gt_labels_3d.shape)
+        high_pos_inds = pos_inds[pseudo_actions[pos_assigned_gt_inds.long()] == 1]
+        medium_pos_inds = pos_inds[pseudo_actions[pos_assigned_gt_inds.long()] == -1]
         if gt_bboxes_3d.numel() == 0:
             assert pos_inds.numel() == 0
             pos_gt_bboxes = torch.empty_like(gt_bboxes_3d).view(-1, 9)
@@ -379,6 +393,9 @@ class TransFusionHead(nn.Module):
                         pos_reg = pseudo_reg_weights[pos_assigned_gt_inds.long()].to(bbox_weights.dtype)
                     bbox_weights[pos_inds, :] = bbox_weights[pos_inds, :] * pos_reg.unsqueeze(-1)
 
+            label_weights[medium_pos_inds] = 0.0
+            bbox_weights[medium_pos_inds, :] = 0.0
+
         if len(neg_inds) > 0:
             label_weights[neg_inds] = 1.0
 
@@ -402,19 +419,21 @@ class TransFusionHead(nn.Module):
 
                 center = torch.tensor([coor_x, coor_y], dtype=torch.float32, device=device)
                 center_int = center.to(torch.int32)
-                centernet_utils.draw_gaussian_to_heatmap(heatmap[gt_labels_3d[idx]], center_int, radius)
+                if pseudo_actions[idx] == 1:
+                    centernet_utils.draw_gaussian_to_heatmap(heatmap[gt_labels_3d[idx]], center_int, radius)
 
 
-        mean_iou = ious[pos_inds].sum() / max(len(pos_inds), 1)
-        return (labels[None], label_weights[None], bbox_targets[None], bbox_weights[None], int(pos_inds.shape[0]), float(mean_iou), heatmap[None])
+        mean_iou = ious[high_pos_inds].sum() / max(len(high_pos_inds), 1)
+        return (labels[None], label_weights[None], bbox_targets[None], bbox_weights[None], int(high_pos_inds.shape[0]), float(mean_iou), heatmap[None])
 
-    def loss(self, gt_bboxes_3d, gt_labels_3d, pred_dicts, pseudo_weights=None, pseudo_reg_weights=None, **kwargs):
+    def loss(self, gt_bboxes_3d, gt_labels_3d, pred_dicts, pseudo_weights=None, pseudo_reg_weights=None, pseudo_actions=None, **kwargs):
 
         labels, label_weights, bbox_targets, bbox_weights, num_pos, matched_ious, heatmap = \
             self.get_targets(
                 gt_bboxes_3d, gt_labels_3d, pred_dicts,
                 pseudo_weights=pseudo_weights,
                 pseudo_reg_weights=pseudo_reg_weights,
+                pseudo_actions=pseudo_actions,
             )
         loss_dict = dict()
         loss_all = 0
