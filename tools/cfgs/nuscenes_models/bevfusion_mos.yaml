@@ -36,7 +36,8 @@ DATA_CONFIG:
             SEVERITY: 1
         LIDAR_SPARSITY:
             ENABLED: False
-            SEVERITY: 1
+            SEVERITY: 5
+            MODE: density_dec_global
         IMAGE_STYLE:
             ENABLED: False
             SEVERITY: 1
