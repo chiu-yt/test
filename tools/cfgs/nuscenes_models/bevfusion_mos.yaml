@@ -4,6 +4,7 @@ CLASS_NAMES: ['car','truck', 'construction_vehicle', 'bus', 'trailer',
 
 DATA_CONFIG:
     _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
+    MAX_SWEEPS: 5
     
     # Full nuScenes val target-domain benchmark
     DATA_SPLIT: {
