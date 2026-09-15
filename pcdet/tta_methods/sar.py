@@ -13,16 +13,18 @@ from pcdet.tta_methods.sar_utils import (
     snapshot_sar_state,
     update_sar_ema,
 )
+from pcdet.tta_methods.sar_proposals import align_entropy_strict, align_selected_entropy, validated_proposal_ids
 from pcdet.tta_methods.tent_entropy import extract_detection_entropy
 from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
 
 
 @dataclass(frozen=True)  # noqa: SLOTS_OK - Required by the server's pre-3.10 dataclasses.
 class SARStepInput:
-    """Inputs retained from the evaluator's pre-adaptation forward."""
+    """Detached selection inputs plus the batch used for adaptation forwards."""
 
     batch: Mapping
     first_entropy: torch.Tensor
+    proposal_ids: torch.Tensor
     hmax: float
     batch_idx: int
 
@@ -100,14 +102,18 @@ class SAR:
 
     @torch.enable_grad()
     def adapt(self, step: SARStepInput) -> SARStepResult:
-        first_mask = normalized_reliable_mask(
-            step.first_entropy, step.hmax, self.reliable_margin_norm
+        prediction_entropy = step.first_entropy.detach()
+        prediction_ids = validated_proposal_ids(
+            step.proposal_ids, prediction_entropy, 'prediction'
         )
-        proposal_count = int(step.first_entropy.numel())
+        first_mask = normalized_reliable_mask(
+            prediction_entropy, step.hmax, self.reliable_margin_norm
+        )
+        proposal_count = int(prediction_entropy.numel())
         first_selected = int(first_mask.sum().item())
-        first_entropy_finite = bool(torch.isfinite(step.first_entropy).all().item())
+        first_entropy_finite = bool(torch.isfinite(prediction_entropy).all().item())
         first_raw_mean = (
-            float(step.first_entropy[first_mask].detach().mean().item())
+            float(prediction_entropy[first_mask].mean().item())
             if first_selected else None
         )
         first_norm_mean = (
@@ -124,7 +130,20 @@ class SAR:
             )
 
         self.optimizer.zero_grad()
-        loss_first = step.first_entropy[first_mask].mean()
+        with TransFusionLogitCapture(self.model) as capture:
+            self.model(dict(step.batch))
+        first_logits = capture.logits
+        assert first_logits is not None
+        adaptation_entropy, _ = extract_detection_entropy(
+            first_logits, mode=self.entropy_mode
+        )
+        adaptation_ids = validated_proposal_ids(
+            capture.proposal_ids, adaptation_entropy, 'unperturbed adaptation'
+        )
+        adaptation_entropy = align_entropy_strict(
+            adaptation_entropy, adaptation_ids, prediction_ids
+        )
+        loss_first = adaptation_entropy[first_mask].mean()
         loss_first.backward()
         first_grad_norm_tensor = self.optimizer._grad_norm()
         first_grad_norm = float(first_grad_norm_tensor.item())
@@ -151,8 +170,13 @@ class SAR:
             second_entropy, second_hmax = extract_detection_entropy(
                 second_logits, mode=self.entropy_mode
             )
+            second_ids = validated_proposal_ids(
+                capture.proposal_ids, second_entropy, 'perturbed adaptation'
+            )
             second_entropy_finite = bool(torch.isfinite(second_entropy).all().item())
-            second_subset = second_entropy[first_mask]
+            second_subset = align_selected_entropy(
+                second_entropy, second_ids, prediction_ids, first_mask
+            )
             second_mask = normalized_reliable_mask(
                 second_subset, second_hmax, self.reliable_margin_norm
             )

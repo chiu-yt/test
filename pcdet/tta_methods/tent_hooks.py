@@ -1,7 +1,12 @@
+class TransFusionCaptureError(KeyError):
+    """Raised when TransFusion does not expose the requested capture tensor."""
+
+
 class TransFusionLogitCapture:
     def __init__(self, model):
         self.model = model.module if hasattr(model, 'module') else model
         self.logits = None
+        self.proposal_ids = None
         self._original_predict = None
 
     def __enter__(self):
@@ -14,8 +19,13 @@ class TransFusionLogitCapture:
         def wrapped_predict(inputs):
             result = original_predict(inputs)
             if 'heatmap' not in result:
-                raise KeyError('Tent could not find pre-NMS classification logits in dense_head.predict result["heatmap"]')
+                raise TransFusionCaptureError(
+                    'Tent could not find pre-NMS classification logits in dense_head.predict result["heatmap"]'
+                )
             self.logits = result['heatmap']
+            proposal_ids = getattr(dense_head, 'last_top_proposals', None)
+            if proposal_ids is not None:
+                self.proposal_ids = proposal_ids.detach()
             return result
 
         dense_head.predict = wrapped_predict

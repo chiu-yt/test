@@ -5,6 +5,7 @@ import tqdm
 
 from pcdet.models import load_data_to_gpu
 from pcdet.tta_methods.sar import SAR, SARStepInput
+from pcdet.tta_methods.sar_proposals import SARProposalAlignmentError
 from pcdet.tta_methods.sar_utils import (
     EXCLUDED_NAME_PARTS,
     build_sar_optimizer,
@@ -143,7 +144,7 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
         batch_start = time.time()
         load_data_to_gpu(original_batch)
         prediction_batch = _build_adaptation_batch(original_batch)
-        with torch.enable_grad():
+        with torch.no_grad():
             with TransFusionLogitCapture(model) as capture:
                 pred_dicts, _ = model(prediction_batch)
         pred_dicts = _detach_tensor_tree(pred_dicts)
@@ -157,6 +158,11 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
 
         logits = capture.logits
         assert logits is not None
+        proposal_ids = capture.proposal_ids
+        if proposal_ids is None:
+            raise SARProposalAlignmentError(
+                'SAR prediction forward did not expose proposal IDs'
+            )
         first_entropy, hmax = extract_detection_entropy(
             logits, mode=adapter.entropy_mode
         )
@@ -167,7 +173,8 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
         )
         step = SARStepInput(
             batch=_build_adaptation_batch(original_batch),
-            first_entropy=first_entropy,
+            first_entropy=first_entropy.detach(),
+            proposal_ids=proposal_ids.detach(),
             hmax=hmax,
             batch_idx=batch_idx,
         )

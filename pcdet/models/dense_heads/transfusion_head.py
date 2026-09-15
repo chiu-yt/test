@@ -198,6 +198,7 @@ class TransFusionHead(nn.Module):
         ]
         top_proposals_class = top_proposals // heatmap.shape[-1]
         top_proposals_index = top_proposals % heatmap.shape[-1]
+        self.last_top_proposals = top_proposals.detach()
         query_feat = lidar_feat_flatten.gather(
             index=top_proposals_index[:, None, :].expand(-1, lidar_feat_flatten.shape[1], -1),
             dim=-1,
