@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import torch
 import torch.nn as nn
+import yaml
 
 from pcdet.tta_methods.tent_entropy import entropy_loss_from_logits
 from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
@@ -9,7 +12,11 @@ from pcdet.tta_methods.tent_utils import (
     clone_named_parameters,
     configure_model_for_tent,
 )
-from tools.eval_utils.tent_eval_utils import _tent_step_indices, _tent_updates_enabled
+from tools.eval_utils.tent_eval_utils import (
+    _tent_step_indices,
+    _tent_update_norm_stats_enabled,
+    _tent_updates_enabled,
+)
 
 
 class DummyCfg(dict):
@@ -67,6 +74,28 @@ def test_entropy_loss_uses_finite_bernoulli_terms():
     assert diag['mode'] == 'bernoulli'
 
 
+def test_softmax_entropy_is_invariant_to_uniform_negative_shift():
+    logits = torch.linspace(-2.0, 2.0, steps=4000).reshape(2, 10, 200)
+
+    loss, _ = entropy_loss_from_logits(logits, entropy_mode='softmax')
+    shifted_loss, _ = entropy_loss_from_logits(logits - 20.0, entropy_mode='softmax')
+
+    assert loss is not None
+    assert shifted_loss is not None
+    assert torch.allclose(loss, shifted_loss, atol=1e-6)
+
+
+def test_bernoulli_entropy_decreases_under_uniform_negative_shift():
+    logits = torch.linspace(-2.0, 2.0, steps=4000).reshape(2, 10, 200)
+
+    loss, _ = entropy_loss_from_logits(logits, entropy_mode='bernoulli')
+    shifted_loss, _ = entropy_loss_from_logits(logits - 20.0, entropy_mode='bernoulli')
+
+    assert loss is not None
+    assert shifted_loss is not None
+    assert shifted_loss < loss
+
+
 def test_transfusion_logit_capture_reads_pre_nms_heatmap():
     model = FakeDetector()
     with TransFusionLogitCapture(model) as capture:
@@ -115,3 +144,33 @@ def test_zero_tent_steps_disable_grad_updates():
     assert list(_tent_step_indices(0)) == []
     assert _tent_updates_enabled(1) is True
     assert list(_tent_step_indices(1)) == [0]
+
+
+def test_zero_tent_steps_disable_norm_stat_updates():
+    assert _tent_update_norm_stats_enabled(DummyCfg({'UPDATE_NORM_STATS': True}), steps=0) is False
+    assert _tent_update_norm_stats_enabled(DummyCfg({'UPDATE_NORM_STATS': True}), steps=1) is True
+
+
+def test_zero_tent_steps_preserve_source_bn_output():
+    model = TinyTentModel().eval()
+    inputs = torch.randn(2, 3, 4, 4)
+    source_output = model(inputs).detach()
+    update_norm_stats = _tent_update_norm_stats_enabled(
+        DummyCfg({'UPDATE_NORM_STATS': True}), steps=0
+    )
+
+    configure_model_for_tent(model, DummyCfg({'UPDATE_NORM_STATS': update_norm_stats}))
+    tent_output = model(inputs).detach()
+
+    assert torch.equal(tent_output, source_output)
+
+
+def test_bevfusion_tent_config_uses_stable_defaults():
+    config_path = Path(__file__).parents[1] / 'tools/cfgs/nuscenes_models/bevfusion_tent.yaml'
+
+    with config_path.open(encoding='utf-8') as config_file:
+        tent_cfg = yaml.safe_load(config_file)['TTA']['TENT']
+
+    assert tent_cfg['ENTROPY_MODE'] == 'softmax'
+    assert tent_cfg['UPDATE_NORM_STATS'] is False
+    assert tent_cfg['LR'] == 0.0001

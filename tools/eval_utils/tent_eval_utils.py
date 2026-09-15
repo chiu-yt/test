@@ -66,6 +66,10 @@ def _tent_updates_enabled(steps):
     return int(steps) > 0
 
 
+def _tent_update_norm_stats_enabled(tent_cfg, steps):
+    return _tent_updates_enabled(steps) and bool(tent_cfg.get('UPDATE_NORM_STATS', True))
+
+
 def _log_param_debug(logger, before_params, model, trainable_names):
     changed = changed_parameter_names(before_params, model)
     illegal_changed = [name for name in changed if name not in set(trainable_names)]
@@ -98,7 +102,10 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
     pred_class_counter = _init_class_counter(class_names)
 
     logger.info('*************** EPOCH %s TENT EVALUATION *****************' % epoch_id)
-    params, param_names, bn_count, trainable_count, total_count = configure_model_for_tent(model, tent_cfg, logger)
+    steps = int(tent_cfg.get('STEPS', 1))
+    model_tent_cfg = dict(tent_cfg)
+    model_tent_cfg['UPDATE_NORM_STATS'] = _tent_update_norm_stats_enabled(tent_cfg, steps)
+    params, param_names, bn_count, trainable_count, total_count = configure_model_for_tent(model, model_tent_cfg, logger)
     if not params:
         raise RuntimeError('Tent found no BN-family affine parameters to optimize')
     optimizer = build_tent_optimizer(params, tent_cfg)
@@ -115,7 +122,6 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
         progress_bar = tqdm.tqdm(total=len(dataloader), leave=True, desc='tent_eval', dynamic_ncols=True)
 
     start_time = time.time()
-    steps = int(tent_cfg.get('STEPS', 1))
     log_interval = int(tent_cfg.get('LOG_INTERVAL', 50))
     min_valid_terms = int(tent_cfg.get('MIN_VALID_TERMS', 1))
     debug_param_check = bool(tent_cfg.get('DEBUG_PARAM_CHECK', False))
