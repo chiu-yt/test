@@ -33,16 +33,46 @@ def extract_detection_entropy(logits, mode='sigmoid'):
     return entropy, hmax
 
 
-def entropy_loss_from_logits(logits, entropy_mode='auto', min_valid_terms=1, use_sigmoid=True):
+def entropy_loss_from_logits(
+    logits, entropy_mode='auto', min_valid_terms=1, use_sigmoid=True,
+    proposal_conf_thresh=0.5,
+):
     if logits is None:
         return None, {'valid_terms': 0, 'finite': False, 'shape': None, 'mode': entropy_mode}
 
     mode = str(entropy_mode).lower()
     if mode == 'auto':
         mode = 'sigmoid' if use_sigmoid else 'softmax'
+    is_filtered_sigmoid = mode in ('proposal_filtered_sigmoid', 'filtered_sigmoid')
     is_sigmoid = mode in ('sigmoid', 'bernoulli')
-    if not is_sigmoid and mode != 'softmax':
+    if not is_filtered_sigmoid and not is_sigmoid and mode != 'softmax':
         raise NotImplementedError('Unsupported Tent entropy mode: %s' % mode)
+
+    if is_filtered_sigmoid:
+        confidence = torch.sigmoid(logits).max(dim=1).values
+        finite_proposals = torch.isfinite(logits).all(dim=1)
+        selected = finite_proposals & (confidence >= float(proposal_conf_thresh))
+        selected_proposals = int(selected.sum().item())
+        selected_logits = logits.permute(0, 2, 1)[selected]
+        entropy = bernoulli_entropy_from_logits(selected_logits)
+        finite_entropy = entropy[torch.isfinite(entropy)]
+        valid_terms = int(finite_entropy.numel())
+        if valid_terms < int(min_valid_terms):
+            return None, {
+                'valid_terms': valid_terms,
+                'selected_proposals': selected_proposals,
+                'finite': False,
+                'shape': tuple(logits.shape),
+                'mode': mode,
+            }
+        loss = finite_entropy.mean()
+        return loss, {
+            'valid_terms': valid_terms,
+            'selected_proposals': selected_proposals,
+            'finite': bool(torch.isfinite(loss).item()),
+            'shape': tuple(logits.shape),
+            'mode': mode,
+        }
 
     entropy, _ = extract_detection_entropy(logits, mode='sigmoid' if is_sigmoid else 'softmax')
 

@@ -1,3 +1,4 @@
+import math
 import pickle
 import time
 
@@ -56,6 +57,10 @@ def _grad_norm(parameters):
     if total is None:
         return 0.0
     return float(total.sqrt().item())
+
+
+def _gradients_are_finite(parameters):
+    return all(param.grad is None or bool(torch.isfinite(param.grad).all().item()) for param in parameters)
 
 
 def _tent_step_indices(steps):
@@ -124,6 +129,7 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
     start_time = time.time()
     log_interval = int(tent_cfg.get('LOG_INTERVAL', 50))
     min_valid_terms = int(tent_cfg.get('MIN_VALID_TERMS', 1))
+    proposal_conf_thresh = float(tent_cfg.get('PROPOSAL_CONF_THRESH', 0.5))
     debug_param_check = bool(tent_cfg.get('DEBUG_PARAM_CHECK', False))
 
     for i, batch_dict in enumerate(dataloader):
@@ -150,13 +156,20 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
             )
 
             loss = None
-            loss_diag = {'valid_terms': 0, 'finite': False, 'shape': None, 'mode': tent_cfg.get('ENTROPY_MODE', 'auto')}
+            loss_diag = {
+                'valid_terms': 0,
+                'selected_proposals': 0,
+                'finite': False,
+                'shape': None,
+                'mode': tent_cfg.get('ENTROPY_MODE', 'auto'),
+            }
             if not updates_enabled:
                 loss, loss_diag = entropy_loss_from_logits(
                     capture.logits,
                     entropy_mode=tent_cfg.get('ENTROPY_MODE', 'auto'),
                     min_valid_terms=min_valid_terms,
                     use_sigmoid=use_sigmoid,
+                    proposal_conf_thresh=proposal_conf_thresh,
                 )
             for _ in _tent_step_indices(steps):
                 loss, loss_diag = entropy_loss_from_logits(
@@ -164,11 +177,20 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
                     entropy_mode=tent_cfg.get('ENTROPY_MODE', 'auto'),
                     min_valid_terms=min_valid_terms,
                     use_sigmoid=use_sigmoid,
+                    proposal_conf_thresh=proposal_conf_thresh,
                 )
                 if loss is None or not loss_diag['finite']:
                     break
                 loss.backward(retain_graph=False)
+                if not _gradients_are_finite(params):
+                    loss_diag['finite'] = False
+                    optimizer.zero_grad()
+                    break
                 grad_norm_value = _grad_norm(params)
+                if not math.isfinite(grad_norm_value):
+                    loss_diag['finite'] = False
+                    optimizer.zero_grad()
+                    break
                 clip_val = float(tent_cfg.get('GRAD_NORM_CLIP', 0.0))
                 if clip_val > 0:
                     torch.nn.utils.clip_grad_norm_(params, clip_val)
@@ -188,12 +210,13 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
         disp_dict.update({
             'tent_entropy': '%.4f' % loss_value,
             'tent_terms': int(loss_diag['valid_terms']),
+            'tent_selected': int(loss_diag.get('selected_proposals', 0)),
             'tent_grad': '%.4f' % grad_norm_value,
         })
         if i == 0 or (log_interval > 0 and i % log_interval == 0):
             logger.info(
-                '[Tent] batch=%d entropy=%s terms=%s grad_norm=%.6f trainable=%d/%d bn=%d finite=%s logits_shape=%s'
-                % (i, loss_value, loss_diag['valid_terms'], grad_norm_value, trainable_count, total_count, bn_count, loss_diag['finite'], loss_diag['shape'])
+                '[Tent] batch=%d entropy=%s terms=%s selected=%s grad_norm=%.6f trainable=%d/%d bn=%d finite=%s logits_shape=%s'
+                % (i, loss_value, loss_diag['valid_terms'], loss_diag.get('selected_proposals', 0), grad_norm_value, trainable_count, total_count, bn_count, loss_diag['finite'], loss_diag['shape'])
             )
 
         if progress_bar is not None:

@@ -67,10 +67,11 @@ TTA:
     TENT:
         ENABLED: True
         OPTIMIZER: Adam
-        LR: 0.0001
+        LR: 0.00001
         WEIGHT_DECAY: 0.0
         STEPS: 1
-        ENTROPY_MODE: softmax
+        ENTROPY_MODE: proposal_filtered_sigmoid
+        PROPOSAL_CONF_THRESH: 0.5
         UPDATE_NORM_STATS: False
         RESET_BN_STATS: False
         MIN_VALID_TERMS: 1

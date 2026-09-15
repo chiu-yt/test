@@ -1,10 +1,15 @@
+import math
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import yaml
 
-from pcdet.tta_methods.tent_entropy import entropy_loss_from_logits
+from pcdet.tta_methods.tent_entropy import (
+    bernoulli_entropy_from_logits,
+    entropy_loss_from_logits,
+    extract_detection_entropy,
+)
 from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
 from pcdet.tta_methods.tent_utils import (
     build_tent_optimizer,
@@ -12,6 +17,7 @@ from pcdet.tta_methods.tent_utils import (
     clone_named_parameters,
     configure_model_for_tent,
 )
+from tools.eval_utils import tent_eval_utils
 from tools.eval_utils.tent_eval_utils import (
     _tent_step_indices,
     _tent_update_norm_stats_enabled,
@@ -96,6 +102,93 @@ def test_bernoulli_entropy_decreases_under_uniform_negative_shift():
     assert shifted_loss < loss
 
 
+def test_filtered_sigmoid_selects_only_confident_proposals():
+    logits = torch.tensor([[[2.0, -2.0, 1.0], [-2.0, -2.0, -1.0]]])
+    expected = bernoulli_entropy_from_logits(logits[:, :, [0, 2]]).mean()
+
+    loss, diag = entropy_loss_from_logits(
+        logits,
+        entropy_mode='proposal_filtered_sigmoid',
+        proposal_conf_thresh=0.5,
+    )
+
+    assert loss is not None
+    assert torch.allclose(loss, expected)
+    assert diag['selected_proposals'] == 2
+    assert diag['valid_terms'] == 4
+
+
+def test_filtered_sigmoid_updates_only_selected_proposals():
+    logits = torch.tensor(
+        [[[2.0, -2.0, 1.0], [-2.0, -2.0, -1.0]]],
+        requires_grad=True,
+    )
+
+    loss, _ = entropy_loss_from_logits(
+        logits,
+        entropy_mode='proposal_filtered_sigmoid',
+        proposal_conf_thresh=0.5,
+    )
+    assert loss is not None
+    loss.backward()
+
+    assert torch.count_nonzero(logits.grad[:, :, [0, 2]]) > 0
+    assert torch.count_nonzero(logits.grad[:, :, 1]) == 0
+
+
+def test_filtered_sigmoid_skips_empty_selection():
+    logits = torch.full((1, 10, 4), -2.0)
+
+    loss, diag = entropy_loss_from_logits(
+        logits,
+        entropy_mode='proposal_filtered_sigmoid',
+        proposal_conf_thresh=0.5,
+    )
+
+    assert loss is None
+    assert diag['finite'] is False
+    assert diag['selected_proposals'] == 0
+    assert diag['valid_terms'] == 0
+
+
+def test_filtered_sigmoid_excludes_nonfinite_proposals_before_backward():
+    logits = torch.tensor(
+        [[[2.0, float('nan')], [-2.0, -2.0]]],
+        requires_grad=True,
+    )
+
+    loss, diag = entropy_loss_from_logits(
+        logits,
+        entropy_mode='proposal_filtered_sigmoid',
+        proposal_conf_thresh=0.5,
+    )
+    assert loss is not None
+    loss.backward()
+
+    assert diag['selected_proposals'] == 1
+    assert torch.isfinite(logits.grad).all()
+    assert torch.count_nonzero(logits.grad[:, :, 1]) == 0
+
+
+def test_tent_rejects_nonfinite_optimizer_gradients():
+    model = TinyTentModel()
+    parameter = next(model.parameters())
+    parameter.grad = torch.full_like(parameter, float('nan'))
+    helper = getattr(tent_eval_utils, '_gradients_are_finite', None)
+
+    assert helper is not None
+    assert helper(model.parameters()) is False
+
+
+def test_legacy_sigmoid_detection_entropy_is_unchanged():
+    logits = torch.tensor([[[2.0, -2.0], [-1.0, 1.0]]])
+
+    entropy, hmax = extract_detection_entropy(logits, mode='sigmoid')
+
+    assert torch.allclose(entropy, bernoulli_entropy_from_logits(logits).mean(dim=1))
+    assert abs(hmax - math.log(2.0)) < 1e-12
+
+
 def test_transfusion_logit_capture_reads_pre_nms_heatmap():
     model = FakeDetector()
     with TransFusionLogitCapture(model) as capture:
@@ -171,6 +264,7 @@ def test_bevfusion_tent_config_uses_stable_defaults():
     with config_path.open(encoding='utf-8') as config_file:
         tent_cfg = yaml.safe_load(config_file)['TTA']['TENT']
 
-    assert tent_cfg['ENTROPY_MODE'] == 'softmax'
+    assert tent_cfg['ENTROPY_MODE'] == 'proposal_filtered_sigmoid'
+    assert tent_cfg['PROPOSAL_CONF_THRESH'] == 0.5
     assert tent_cfg['UPDATE_NORM_STATS'] is False
-    assert tent_cfg['LR'] == 0.0001
+    assert tent_cfg['LR'] == 0.00001
