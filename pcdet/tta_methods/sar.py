@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -15,7 +17,7 @@ from pcdet.tta_methods.tent_entropy import extract_detection_entropy
 from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Required by the server's pre-3.10 dataclasses.
 class SARStepInput:
     """Inputs retained from the evaluator's pre-adaptation forward."""
 
@@ -25,7 +27,7 @@ class SARStepInput:
     batch_idx: int
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Required by the server's pre-3.10 dataclasses.
 class SARStepResult:
     """Observable diagnostics for one independent SAR transaction."""
 
