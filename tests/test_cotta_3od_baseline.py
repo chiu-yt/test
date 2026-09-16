@@ -51,6 +51,22 @@ def _call_lines(tree, name):
     )
 
 
+def _attribute_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _attribute_name(node.value)
+        return '%s.%s' % (parent, node.attr) if parent else node.attr
+    return None
+
+
+def _subscript_slice(node):
+    slice_node = node.slice
+    if type(slice_node).__name__ == 'Index':
+        return getattr(slice_node, 'value')
+    return slice_node
+
+
 def test_initialize_cotta_models_preserves_source_state_and_student_trainable_scope():
     # Given a source detector with only its head selected for adaptation.
     model = TinyCottaModel()
@@ -274,9 +290,20 @@ def test_production_scale_view_composes_sampled_scale_after_existing_matrix():
         and node.func.value.id == 'lidar_aug_matrices'
     )
 
-    assert ast.unparse(append_call.args[0]) == (
-        "sampled_matrix @ original_batch['lidar_aug_matrix'][batch_index]"
-    )
+    composition = append_call.args[0]
+    assert isinstance(composition, ast.BinOp)
+    assert isinstance(composition.op, ast.MatMult)
+    assert isinstance(composition.left, ast.Name)
+    assert composition.left.id == 'sampled_matrix'
+    assert isinstance(composition.right, ast.Subscript)
+    matrix_index = _subscript_slice(composition.right)
+    assert isinstance(matrix_index, ast.Name)
+    assert matrix_index.id == 'batch_index'
+    original_matrix = composition.right.value
+    assert isinstance(original_matrix, ast.Subscript)
+    assert isinstance(original_matrix.value, ast.Name)
+    assert original_matrix.value.id == 'original_batch'
+    assert getattr(_subscript_slice(original_matrix), 'value', None) == 'lidar_aug_matrix'
 
 
 def test_production_evaluator_initializes_models_once_before_stream():
@@ -286,10 +313,13 @@ def test_production_evaluator_initializes_models_once_before_stream():
         node for node in ast.walk(tree)
         if isinstance(node, ast.For)
         and isinstance(node.target, ast.Tuple)
-        and ast.unparse(node.target) == '(batch_index, original_batch)'
+        and [
+            element.id for element in node.target.elts
+            if isinstance(element, ast.Name)
+        ] == ['batch_index', 'original_batch']
     )
     call_lines = {
-        ast.unparse(node.func): node.lineno
+        _attribute_name(node.func): node.lineno
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
     }
