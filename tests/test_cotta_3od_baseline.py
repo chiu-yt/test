@@ -21,6 +21,7 @@ from tools.eval_utils.cotta_eval_utils import (
     _is_gt_field,
     eval_cotta_one_epoch,
 )
+from tools.eval_utils.cotta_eval_results import _ema_parameter_delta
 
 
 class TinyCottaModel(nn.Module):
@@ -99,6 +100,30 @@ def test_update_ema_teacher_uses_teacher_weighted_moving_average():
     torch.testing.assert_close(teacher.bias, torch.full_like(teacher.bias, 3.0))
     torch.testing.assert_close(student.weight, torch.full_like(student.weight, 8.0))
     assert not any(parameter.requires_grad for parameter in teacher.parameters())
+
+
+def test_update_ema_teacher_copies_discrete_parameters_without_casting():
+    # Given teacher and student models with floating and discrete parameters.
+    teacher = TinyCottaModel()
+    student = TinyCottaModel()
+    teacher.step = nn.Parameter(torch.tensor(1, dtype=torch.long), requires_grad=False)
+    student.step = nn.Parameter(torch.tensor(7, dtype=torch.long), requires_grad=False)
+    with torch.no_grad():
+        for parameter in teacher.parameters():
+            if parameter.is_floating_point():
+                parameter.zero_()
+        for parameter in student.parameters():
+            if parameter.is_floating_point():
+                parameter.fill_(8.0)
+
+    # When the pre-update delta is measured and the teacher receives an EMA update.
+    delta = _ema_parameter_delta(teacher, student, alpha=0.75)
+    update_ema_teacher(teacher, student, alpha=0.75)
+
+    # Then floating parameters use EMA while the discrete parameter is copied exactly.
+    assert delta == pytest.approx(2.0)
+    assert teacher.step.item() == 7
+    torch.testing.assert_close(teacher.head.weight, torch.full_like(teacher.head.weight, 2.0))
 
 
 @pytest.mark.parametrize(

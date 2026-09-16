@@ -38,8 +38,11 @@ def update_ema_teacher(teacher, student, alpha):
     student_buffers = dict(student.named_buffers())
     with torch.no_grad():
         for name, teacher_parameter in teacher.named_parameters():
-            student_parameter = student_parameters[name]
-            teacher_parameter.mul_(alpha).add_(student_parameter.detach(), alpha=1.0 - alpha)
+            student_parameter = student_parameters[name].detach()
+            if teacher_parameter.is_floating_point() or teacher_parameter.is_complex():
+                teacher_parameter.mul_(alpha).add_(student_parameter, alpha=1.0 - alpha)
+            else:
+                teacher_parameter.copy_(student_parameter)
 
         for name, teacher_buffer in teacher.named_buffers():
             student_buffer = student_buffers[name].detach()

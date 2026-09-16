@@ -69,6 +69,8 @@ def _ema_parameter_delta(teacher, student, alpha):
     delta_sum = 0.0
     parameter_count = 0
     for name, teacher_parameter in teacher.named_parameters():
+        if not (teacher_parameter.is_floating_point() or teacher_parameter.is_complex()):
+            continue
         difference = student_parameters[name].detach() - teacher_parameter.detach()
         delta_sum += float(difference.abs().sum().item())
         parameter_count += difference.numel()
