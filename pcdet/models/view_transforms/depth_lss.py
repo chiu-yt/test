@@ -12,6 +12,11 @@ def gen_dx_bx(xbound, ybound, zbound):
     return dx, bx, nx
 
 
+def _inverse_small_matrices(matrices):
+    inverse = torch.inverse(matrices.detach().cpu())
+    return inverse.to(device=matrices.device, dtype=matrices.dtype)
+
+
 class DepthLSSTransform(nn.Module):
     """
         This module implements LSS, which lists images into 3D and then splats onto bev features.
@@ -100,11 +105,13 @@ class DepthLSSTransform(nn.Module):
         # undo post-transformation
         # B x N x D x H x W x 3
         points = self.frustum - post_trans.view(B, N, 1, 1, 1, 3)
-        points = torch.inverse(post_rots).view(B, N, 1, 1, 1, 3, 3).matmul(points.unsqueeze(-1))
+        points = _inverse_small_matrices(post_rots).view(
+            B, N, 1, 1, 1, 3, 3
+        ).matmul(points.unsqueeze(-1))
         
         # cam_to_lidar
         points = torch.cat((points[:, :, :, :, :, :2] * points[:, :, :, :, :, 2:3], points[:, :, :, :, :, 2:3]), 5)
-        combine = camera2lidar_rots.matmul(torch.inverse(intrins))
+        combine = camera2lidar_rots.matmul(_inverse_small_matrices(intrins))
         points = combine.view(B, N, 1, 1, 1, 3, 3).matmul(points).squeeze(-1)
         points += camera2lidar_trans.view(B, N, 1, 1, 1, 3)
 
@@ -202,6 +209,9 @@ class DepthLSSTransform(nn.Module):
 
         batch_size = BN // 6
         depth = torch.zeros(batch_size, img.shape[1], 1, *self.image_size).to(points[0].device)
+        lidar_aug_inverse = _inverse_small_matrices(
+            lidar_aug_matrix[..., :3, :3].to(torch.float)
+        )
 
         for b in range(batch_size):
             batch_mask = points[:,0] == b
@@ -212,7 +222,7 @@ class DepthLSSTransform(nn.Module):
 
             # inverse aug
             cur_coords -= cur_lidar_aug_matrix[:3, 3]
-            cur_coords = torch.inverse(cur_lidar_aug_matrix[:3, :3]).matmul(
+            cur_coords = lidar_aug_inverse[b].matmul(
                 cur_coords.transpose(1, 0)
             )
             # lidar2image

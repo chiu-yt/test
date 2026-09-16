@@ -16,6 +16,10 @@ from pcdet.tta_methods.cotta_utils import (
     transform_boxes_between_views,
     update_ema_teacher,
 )
+from pcdet.models.view_transforms.depth_lss import (
+    DepthLSSTransform,
+    _inverse_small_matrices,
+)
 from tools.eval_utils.cotta_eval_utils import (
     _ScaleViewBuilder,
     _is_gt_field,
@@ -261,6 +265,60 @@ def test_transform_boxes_routes_small_linalg_operations_to_cpu(monkeypatch):
     )
     torch.testing.assert_close(
         transformed_cpu[:, 6], expected[:, 6], rtol=0.0, atol=2e-4
+    )
+
+
+def test_depth_lss_routes_all_matrix_inverses_through_cpu_helper():
+    # Given both DepthLSS methods that invert calibration or augmentation matrices.
+    geometry_tree = _function_tree(DepthLSSTransform.get_geometry)
+    forward_tree = _function_tree(DepthLSSTransform.forward)
+
+    # When their inverse call sites are inspected structurally.
+    geometry_calls = [
+        _attribute_name(node.func) for node in ast.walk(geometry_tree)
+        if isinstance(node, ast.Call)
+    ]
+    forward_calls = [
+        _attribute_name(node.func) for node in ast.walk(forward_tree)
+        if isinstance(node, ast.Call)
+    ]
+
+    # Then no direct CUDA inverse remains and all three sites use the CPU helper.
+    assert 'torch.inverse' not in geometry_calls
+    assert 'torch.inverse' not in forward_calls
+    assert geometry_calls.count('_inverse_small_matrices') == 2
+    assert forward_calls.count('_inverse_small_matrices') == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_depth_lss_small_matrix_inverse_runs_on_cpu_and_returns_to_cuda(monkeypatch):
+    # Given batched CUDA matrices and a wrapper recording the inverse input device.
+    matrices = torch.diag_embed(torch.tensor([
+        [2.0, 4.0, 5.0],
+        [0.5, 0.25, 0.2],
+    ], device='cuda'))
+    inverse_devices = []
+    original_inverse = torch.inverse
+
+    def checked_inverse(matrix):
+        inverse_devices.append(matrix.device.type)
+        return original_inverse(matrix)
+
+    monkeypatch.setattr(torch, 'inverse', checked_inverse)
+
+    # When the shared DepthLSS inverse helper is called.
+    result = _inverse_small_matrices(matrices)
+
+    # Then LAPACK receives CPU tensors and the result returns to CUDA unchanged.
+    assert inverse_devices == ['cpu']
+    assert result.device == matrices.device
+    assert result.dtype == matrices.dtype
+    torch.testing.assert_close(
+        result.cpu(),
+        torch.diag_embed(torch.tensor([
+            [0.5, 0.25, 0.2],
+            [2.0, 4.0, 5.0],
+        ])),
     )
 
 
