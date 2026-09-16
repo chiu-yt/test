@@ -97,26 +97,30 @@ def transform_boxes_between_views(boxes, source_matrix, target_matrix):
     if transformed.shape[0] == 0:
         return transformed
 
-    source_matrix = torch.as_tensor(
-        source_matrix, dtype=transformed.dtype, device=transformed.device
-    )
-    target_matrix = torch.as_tensor(
-        target_matrix, dtype=transformed.dtype, device=transformed.device
-    )
-    source_linear = source_matrix[:3, :3]
-    target_linear = target_matrix[:3, :3]
+    source_matrix_cpu = torch.as_tensor(
+        source_matrix, dtype=transformed.dtype
+    ).detach().cpu()
+    target_matrix_cpu = torch.as_tensor(
+        target_matrix, dtype=transformed.dtype
+    ).detach().cpu()
+    source_linear = source_matrix_cpu[:3, :3]
+    target_linear = target_matrix_cpu[:3, :3]
 
     canonical_centers = torch.linalg.solve(
         source_linear,
-        (transformed[:, :3] - source_matrix[:3, 3]).T,
+        (transformed[:, :3].detach().cpu() - source_matrix_cpu[:3, 3]).T,
     ).T
-    transformed[:, :3] = canonical_centers @ target_linear.T + target_matrix[:3, 3]
+    transformed[:, :3] = (
+        canonical_centers @ target_linear.T + target_matrix_cpu[:3, 3]
+    ).to(device=transformed.device)
 
     source_scale = torch.linalg.vector_norm(source_linear[:, 0])
     target_scale = torch.linalg.vector_norm(target_linear[:, 0])
-    transformed[:, 3:6] *= target_scale / source_scale
+    transformed[:, 3:6] *= float((target_scale / source_scale).item())
 
-    view_linear = target_linear @ torch.linalg.inv(source_linear)
+    view_linear = (
+        target_linear @ torch.linalg.inv(source_linear)
+    ).to(device=transformed.device)
     heading_vectors = torch.stack((
         torch.cos(boxes[:, 6]),
         torch.sin(boxes[:, 6]),

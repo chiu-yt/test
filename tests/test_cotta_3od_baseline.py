@@ -215,6 +215,48 @@ def test_transform_boxes_between_scale_views_includes_dimensions_and_velocities(
     )
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_transform_boxes_routes_small_linalg_operations_to_cpu(monkeypatch):
+    # Given CUDA boxes and wrappers that record every solve/inverse input device.
+    boxes = torch.tensor([
+        [20.0, -8.0, 2.0, 4.0, 8.0, 3.0, 0.3, 6.0, -4.0],
+    ], device='cuda')
+    source_matrix = torch.diag(torch.tensor(
+        [2.0, 2.0, 2.0, 1.0], device='cuda'
+    ))
+    target_matrix = torch.diag(torch.tensor(
+        [0.5, 0.5, 0.5, 1.0], device='cuda'
+    ))
+    linalg_devices = []
+    original_solve = torch.linalg.solve
+    original_inv = torch.linalg.inv
+
+    def checked_solve(matrix, right_hand_side):
+        linalg_devices.append(matrix.device.type)
+        return original_solve(matrix, right_hand_side)
+
+    def checked_inv(matrix):
+        linalg_devices.append(matrix.device.type)
+        return original_inv(matrix)
+
+    monkeypatch.setattr(torch.linalg, 'solve', checked_solve)
+    monkeypatch.setattr(torch.linalg, 'inv', checked_inv)
+
+    # When weak-view boxes are transformed into the strong view.
+    transformed = transform_boxes_between_views(
+        boxes, source_matrix=source_matrix, target_matrix=target_matrix
+    )
+
+    # Then MAGMA is bypassed while output placement and values are preserved.
+    assert linalg_devices == ['cpu', 'cpu']
+    assert transformed.device == boxes.device
+    assert transformed.dtype == boxes.dtype
+    torch.testing.assert_close(
+        transformed.cpu(),
+        torch.tensor([[5.0, -2.0, 0.5, 1.0, 2.0, 0.75, 0.3, 1.5, -1.0]]),
+    )
+
+
 def test_filter_predictions_builds_padded_native_targets_and_aligned_weights():
     # Given two batches containing overlaps, low scores, and invalid 9D boxes.
     pred_dicts = [
