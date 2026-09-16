@@ -78,12 +78,6 @@ def test_evaluator_accumulates_only_detached_pre_adaptation_predictions():
         for keyword in call.keywords
         if keyword.arg == 'first_entropy'
     ]
-    detached_first_entropy = [
-        call for call in _calls(tree, 'detach')
-        if isinstance(call.func, ast.Attribute)
-        and isinstance(call.func.value, ast.Name)
-        and call.func.value.id == 'first_entropy'
-    ]
     deleted_names = {
         target.id
         for node in ast.walk(tree)
@@ -107,7 +101,7 @@ def test_evaluator_accumulates_only_detached_pre_adaptation_predictions():
     assert len(first_entropy_arguments) == 1
     assert isinstance(first_entropy_arguments[0], ast.Name)
     assert first_entropy_arguments[0].id == 'first_entropy'
-    assert detached_first_entropy == []
+    assert _calls(first_entropy_arguments[0], 'detach') == []
     assert {
         'step', 'first_entropy', 'logits', 'capture', 'prediction_batch',
     }.issubset(deleted_names)
