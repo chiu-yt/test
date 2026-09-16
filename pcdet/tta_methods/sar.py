@@ -13,14 +13,14 @@ from pcdet.tta_methods.sar_utils import (
     snapshot_sar_state,
     update_sar_ema,
 )
-from pcdet.tta_methods.sar_proposals import align_entropy_strict, align_selected_entropy, validated_proposal_ids
+from pcdet.tta_methods.sar_proposals import align_selected_entropy, validated_proposal_ids
 from pcdet.tta_methods.tent_entropy import extract_detection_entropy
 from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
 
 
 @dataclass(frozen=True)  # noqa: SLOTS_OK - Required by the server's pre-3.10 dataclasses.
 class SARStepInput:
-    """Detached selection inputs plus the batch used for adaptation forwards."""
+    """Official graph-connected entropy, proposal IDs, and perturbed-pass batch."""
 
     batch: Mapping
     first_entropy: torch.Tensor
@@ -130,20 +130,7 @@ class SAR:
             )
 
         self.optimizer.zero_grad()
-        with TransFusionLogitCapture(self.model) as capture:
-            self.model(dict(step.batch))
-        first_logits = capture.logits
-        assert first_logits is not None
-        adaptation_entropy, _ = extract_detection_entropy(
-            first_logits, mode=self.entropy_mode
-        )
-        adaptation_ids = validated_proposal_ids(
-            capture.proposal_ids, adaptation_entropy, 'unperturbed adaptation'
-        )
-        adaptation_entropy = align_entropy_strict(
-            adaptation_entropy, adaptation_ids, prediction_ids
-        )
-        loss_first = adaptation_entropy[first_mask].mean()
+        loss_first = step.first_entropy[first_mask].mean()
         loss_first.backward()
         first_grad_norm_tensor = self.optimizer._grad_norm()
         first_grad_norm = float(first_grad_norm_tensor.item())

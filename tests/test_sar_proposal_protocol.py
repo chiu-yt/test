@@ -38,6 +38,7 @@ def test_evaluator_accumulates_only_detached_pre_adaptation_predictions():
     detach_calls = _calls(tree, '_detach_tensor_tree')
     annotation_calls = _calls(tree, 'generate_prediction_dicts')
     adapt_calls = _calls(tree, 'adapt')
+    step_calls = _calls(tree, 'SARStepInput')
     accumulations = [
         node for node in ast.walk(tree)
         if isinstance(node, ast.AugAssign)
@@ -71,14 +72,45 @@ def test_evaluator_accumulates_only_detached_pre_adaptation_predictions():
         adapt_calls[0].lineno,
     ]
 
-    # Then one captured official prediction is detached and saved before adapt.
+    first_entropy_arguments = [
+        keyword.value
+        for call in step_calls
+        for keyword in call.keywords
+        if keyword.arg == 'first_entropy'
+    ]
+    detached_first_entropy = [
+        call for call in _calls(tree, 'detach')
+        if isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == 'first_entropy'
+    ]
+    deleted_names = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Delete)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+
+    # Then one graph-connected official prediction is detached for output before adapt.
     assert ordered_lines == sorted(ordered_lines)
     assert len(model_calls) == 1
+    assert len(detach_calls) == 1
+    assert isinstance(detach_calls[0].args[0], ast.Name)
+    assert detach_calls[0].args[0].id == 'pred_dicts'
     assert len(annotation_calls) == 1
     assert len(accumulations) == 1
     assert len(adapt_calls) == 1
+    assert len(step_calls) == 1
     assert len(captured_forwards) == 1
-    assert prediction_contexts == ['no_grad']
+    assert prediction_contexts == ['enable_grad']
+    assert len(first_entropy_arguments) == 1
+    assert isinstance(first_entropy_arguments[0], ast.Name)
+    assert first_entropy_arguments[0].id == 'first_entropy'
+    assert detached_first_entropy == []
+    assert {
+        'step', 'first_entropy', 'logits', 'capture', 'prediction_batch',
+    }.issubset(deleted_names)
 
 
 def test_transfusion_capture_exposes_detached_top_proposal_ids():
@@ -128,7 +160,7 @@ def test_sar_aligns_entropy_by_proposal_identity_not_shape_only():
     strict_alignment = _calls(tree, 'align_entropy_strict')
     selected_alignment = _calls(tree, 'align_selected_entropy')
 
-    # Then proposal IDs drive explicit first and second entropy alignment.
+    # Then official entropy stays graph-connected and perturbed entropy aligns by ID.
     assert 'proposal_ids' in attribute_names
-    assert len(strict_alignment) == 1
+    assert strict_alignment == []
     assert len(selected_alignment) == 1

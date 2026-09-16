@@ -144,10 +144,15 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
         batch_start = time.time()
         load_data_to_gpu(original_batch)
         prediction_batch = _build_adaptation_batch(original_batch)
-        with torch.no_grad():
+        with torch.enable_grad():
             with TransFusionLogitCapture(model) as capture:
                 pred_dicts, _ = model(prediction_batch)
-        pred_dicts = _detach_tensor_tree(pred_dicts)
+            pred_dicts = _detach_tensor_tree(pred_dicts)
+            logits = capture.logits
+            assert logits is not None
+            first_entropy, hmax = extract_detection_entropy(
+                logits, mode=adapter.entropy_mode
+            )
         annos = dataset.generate_prediction_dicts(
             original_batch, pred_dicts, class_names,
             output_path=final_output_dir if args.save_to_file else None,
@@ -156,24 +161,20 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
         display = {}
         _update_pred_class_counter_from_annos(annos, pred_class_counter)
 
-        logits = capture.logits
-        assert logits is not None
         proposal_ids = capture.proposal_ids
         if proposal_ids is None:
             raise SARProposalAlignmentError(
                 'SAR prediction forward did not expose proposal IDs'
             )
-        first_entropy, hmax = extract_detection_entropy(
-            logits, mode=adapter.entropy_mode
-        )
-        finite_entropy = first_entropy[torch.isfinite(first_entropy)]
+        detached_entropy = first_entropy.detach()
+        finite_entropy = detached_entropy[torch.isfinite(detached_entropy)]
         entropy_mean = (
             float(finite_entropy.detach().mean().item())
             if finite_entropy.numel() else float('nan')
         )
         step = SARStepInput(
             batch=_build_adaptation_batch(original_batch),
-            first_entropy=first_entropy.detach(),
+            first_entropy=first_entropy,
             proposal_ids=proposal_ids.detach(),
             hmax=hmax,
             batch_idx=batch_idx,
@@ -218,6 +219,7 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
         if progress_bar is not None:
             progress_bar.set_postfix(display)
             progress_bar.update()
+        del step, first_entropy, logits, capture, prediction_batch
 
     if progress_bar is not None:
         progress_bar.close()

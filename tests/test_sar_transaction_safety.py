@@ -8,6 +8,8 @@ import yaml
 
 from pcdet.tta_methods.sar import SAR, SARStepInput
 from pcdet.tta_methods.sar_optimizer import SAM
+from pcdet.tta_methods.tent_entropy import extract_detection_entropy
+from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
 
 
 class _Detector(nn.Module):
@@ -48,8 +50,10 @@ class _FiniteGradientDenseHead(nn.Module):
     def __init__(self):
         super().__init__()
         self.weight = nn.Parameter(torch.tensor(0.1))
+        self.call_count = 0
 
     def predict(self, _inputs):
+        self.call_count += 1
         _set_proposal_ids(self, [10])
         return {'heatmap': _finite_logits(self.weight)}
 
@@ -83,7 +87,7 @@ class _NonFiniteGradientDenseHead(nn.Module):
 class _FiniteEntropyNonFiniteGradient(torch.autograd.Function):
     @staticmethod
     def forward(ctx, parameter):
-        return parameter.new_tensor([[[0.1]]])
+        return parameter.new_tensor([[[10.0]]])
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -94,8 +98,10 @@ class _FirstNonFiniteGradientDenseHead(nn.Module):
     def __init__(self):
         super().__init__()
         self.weight = nn.Parameter(torch.tensor(0.1))
+        self.call_count = 0
 
     def predict(self, _inputs):
+        self.call_count += 1
         _set_proposal_ids(self, [10])
         return {'heatmap': _FiniteEntropyNonFiniteGradient.apply(self.weight)}
 
@@ -131,30 +137,35 @@ def _build_sar(model):
     return optimizer, SAR(model, optimizer, {'RELIABLE_MARGIN_NORM': 0.4})
 
 
-def _detached_prediction_entropy():
-    return torch.tensor([[0.01]])
-
-
-def _prediction_ids():
-    return torch.tensor([[10]])
+def _capture_official_step(model, batch_idx):
+    batch = {}
+    with TransFusionLogitCapture(model) as capture:
+        model(batch)
+    assert capture.logits is not None
+    first_entropy, hmax = extract_detection_entropy(
+        capture.logits, mode='sigmoid'
+    )
+    return SARStepInput(
+        batch, first_entropy, capture.proposal_ids, hmax, batch_idx,
+    )
 
 
 def _assert_gradient_clean(parameter):
     assert parameter.grad is None or bool((parameter.grad == 0).all().item())
 
 
-def test_adapt_recomputes_first_gradient_from_detached_prediction_entropy():
-    # Given selection entropy from an inference-only prediction forward.
-    model = _Detector(_FiniteGradientDenseHead())
+def test_adapt_reuses_graph_connected_official_entropy_for_first_gradient():
+    # Given graph-connected entropy from the official prediction forward.
+    dense_head = _FiniteGradientDenseHead()
+    model = _Detector(dense_head)
     optimizer, sar = _build_sar(model)
-    step = SARStepInput(
-        {}, _detached_prediction_entropy(), _prediction_ids(), 1.0, 2
-    )
+    step = _capture_official_step(model, 2)
 
-    # When SAR adapts without an evaluator-owned autograd graph.
+    # When SAR adapts from the evaluator-owned official graph.
     result = sar.adapt(step)
 
-    # Then both optimization passes use fresh model forwards successfully.
+    # Then its first gradient reuses that graph and only the perturbed pass runs.
+    assert dense_head.call_count == 2
     assert result.skip_reason is None
     assert result.first_grad_norm is not None
     assert math.isfinite(result.first_grad_norm)
@@ -167,9 +178,7 @@ def test_adapt_restores_transaction_when_second_forward_raises():
     model = _Detector(_FailingDenseHead(expected_error))
     optimizer, sar = _build_sar(model)
     before = model.dense_head.weight.detach().clone()
-    step = SARStepInput(
-        {}, _detached_prediction_entropy(), _prediction_ids(), 1.0, 4,
-    )
+    step = _capture_official_step(model, 4)
 
     # When the perturbed second forward fails.
     with pytest.raises(RuntimeError) as raised:
@@ -177,6 +186,7 @@ def test_adapt_restores_transaction_when_second_forward_raises():
 
     # Then the original error escapes after exact restoration and cleanup.
     assert raised.value is expected_error
+    assert model.dense_head.call_count == 2
     assert torch.equal(model.dense_head.weight, before)
     assert optimizer.transaction_active is False
     assert not any('old_p' in state for state in optimizer.state.values())
@@ -189,14 +199,13 @@ def test_adapt_rolls_back_nonfinite_second_gradient_without_updates():
     optimizer, sar = _build_sar(model)
     sar.ema = 0.25
     before = model.dense_head.weight.detach().clone()
-    step = SARStepInput(
-        {}, _detached_prediction_entropy(), _prediction_ids(), 1.0, 9,
-    )
+    step = _capture_official_step(model, 9)
 
     # When SAR computes the non-finite second gradient norm.
     result = sar.adapt(step)
 
     # Then rollback skips SGD, EMA, and recovery while reporting the reason.
+    assert model.dense_head.call_count == 2
     assert torch.equal(model.dense_head.weight, before)
     assert optimizer.transaction_active is False
     assert not any('old_p' in state for state in optimizer.state.values())
@@ -218,14 +227,13 @@ def test_adapt_skips_first_step_when_first_gradient_is_nonfinite():
     optimizer, sar = _build_sar(model)
     sar.ema = 0.25
     before = model.dense_head.weight.detach().clone()
-    step = SARStepInput(
-        {}, _detached_prediction_entropy(), _prediction_ids(), 1.0, 3,
-    )
+    step = _capture_official_step(model, 3)
 
     # When SAR inspects the first gradient before opening any transaction.
     result = sar.adapt(step)
 
     # Then no transaction or update occurs and the nonfinite reason is reported.
+    assert model.dense_head.call_count == 1
     assert torch.equal(model.dense_head.weight, before)
     assert optimizer.transaction_active is False
     assert not any('old_p' in state for state in optimizer.state.values())
@@ -255,9 +263,7 @@ def test_adapt_restores_partial_transaction_when_first_step_raises():
     )
     sar = SAR(model, optimizer, {'RELIABLE_MARGIN_NORM': 0.4})
     before = model.dense_head.weight.detach().clone()
-    step = SARStepInput(
-        {}, _detached_prediction_entropy(), _prediction_ids(), 1.0, 5,
-    )
+    step = _capture_official_step(model, 5)
 
     # When the perturbation raises after partially mutating the model.
     with pytest.raises(RuntimeError) as raised:
@@ -265,6 +271,7 @@ def test_adapt_restores_partial_transaction_when_first_step_raises():
 
     # Then SAR restores the partial transaction and re-raises the original error.
     assert raised.value is expected_error
+    assert model.dense_head.call_count == 1
     assert torch.equal(model.dense_head.weight, before)
     assert optimizer.transaction_active is False
     assert not any('old_p' in state for state in optimizer.state.values())

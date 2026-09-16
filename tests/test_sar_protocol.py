@@ -9,6 +9,8 @@ import torch.nn as nn
 
 from pcdet.tta_methods.sar import SAR, SARStepInput
 from pcdet.tta_methods.sar_optimizer import SAM
+from pcdet.tta_methods.tent_entropy import extract_detection_entropy
+from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
 from tools.eval_utils.eval_utils import eval_one_epoch
 from tools.eval_utils.sar_eval_utils import (
     _build_adaptation_batch,
@@ -83,9 +85,16 @@ def test_second_empty_rolls_back_without_computing_or_reporting_nan():
         def __init__(self):
             super().__init__()
             self.weight = nn.Parameter(torch.tensor(0.1))
+            self.call_count = 0
 
         def predict(self, _inputs):
-            self.last_top_proposals = torch.tensor([[10]])
+            self.call_count += 1
+            self.last_top_proposals = torch.tensor([[10]], device=self.weight.device)
+            if self.call_count == 1:
+                logits = torch.stack(
+                    (self.weight + 10.0, -self.weight - 10.0)
+                ).reshape(1, 2, 1)
+                return {'heatmap': logits}
             return {'heatmap': self.weight * torch.zeros(1, 2, 1)}
 
     class TinyDetector(nn.Module):
@@ -96,20 +105,22 @@ def test_second_empty_rolls_back_without_computing_or_reporting_nan():
         def forward(self, batch):
             return self.dense_head.predict(batch), {}
 
-    # Given detached selected prediction entropy and high-entropy adaptation logits.
+    # Given graph-connected official entropy and high-entropy perturbed logits.
     model = TinyDetector()
     optimizer = SAM(model.parameters(), torch.optim.SGD, lr=0.1, rho=0.05)
     sar = SAR(model, optimizer, {'RELIABLE_MARGIN_NORM': 0.4})
     sar.ema = 0.25
     before = model.dense_head.weight.detach().clone()
-    step = SARStepInput(
-        {}, torch.tensor([[0.01]]), torch.tensor([[10]]), 1.0, 7
-    )
+    with TransFusionLogitCapture(model) as capture:
+        model({})
+    official_entropy, hmax = extract_detection_entropy(capture.logits, mode='sigmoid')
+    step = SARStepInput({}, official_entropy, capture.proposal_ids, hmax, 7)
 
     # When one real SAR transaction reaches an empty second reliable set.
     result = sar.adapt(step)
 
     # Then rollback is exact and no NaN-derived state is constructed or reported.
+    assert model.dense_head.call_count == 2
     assert result.loss_second is None
     assert torch.equal(model.dense_head.weight, before)
     assert not any('old_p' in state for state in optimizer.state.values())
@@ -242,7 +253,7 @@ def test_second_empty_or_nonfinite_rolls_back_without_update_ema_or_recovery():
 
 
 def test_success_path_uses_nested_filters_then_updates_and_checks_recovery():
-    # Given the wrapper's successful two-pass path.
+    # Given the wrapper's successful official-graph plus perturbed-pass path.
     tree = _function_tree(SAR.adapt)
     backwards = _calls(tree, 'backward')
     filters = _calls(tree, 'normalized_reliable_mask')
@@ -254,15 +265,15 @@ def test_success_path_uses_nested_filters_then_updates_and_checks_recovery():
 
     # When successful operations are read in execution order.
     ordered_lines = [
-        filters[0].lineno, forwards[0].lineno, backwards[0].lineno,
-        first_step.lineno, forwards[1].lineno, filters[1].lineno, backwards[1].lineno,
+        filters[0].lineno, backwards[0].lineno, first_step.lineno,
+        forwards[0].lineno, filters[1].lineno, backwards[1].lineno,
         second_step.lineno, ema.lineno, recovery.lineno,
     ]
 
     # Then SAR performs nested reliable filtering and updates only after pass two.
     assert ordered_lines == sorted(ordered_lines)
     assert len(filters) == 2
-    assert len(forwards) == 2
+    assert len(forwards) == 1
     assert len(backwards) == 2
 
 
