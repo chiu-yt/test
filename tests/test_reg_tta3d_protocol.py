@@ -120,7 +120,8 @@ def test_config_is_neutral_single_gpu_density_s5():
             '_BASE_CONFIG_: cfgs/nuscenes_models/bevfusion.yaml',
             'METHOD: reg_tta3d', 'REG_TTA3D:', 'ENABLED: True', 'STEPS: 1',
             'OPTIMIZER: Adam', 'LR: 0.001', 'MODE: density_dec_global',
-            'SEVERITY: 5', 'ALLOW_DDP: False'):
+            'SEVERITY: 5', 'ALLOW_DDP: False',
+            'POINT_CLOUD_RANGE: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]'):
         assert token in config
     assert 'bevfusion_mos.yaml' not in config
 
