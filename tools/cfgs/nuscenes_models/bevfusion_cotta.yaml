@@ -33,6 +33,7 @@ DATA_CONFIG:
         LIDAR_SPARSITY:
             ENABLED: True
             SEVERITY: 5
+            SEED: 1024
         IMAGE_STYLE:
             ENABLED: False
             SEVERITY: 1
