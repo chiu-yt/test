@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import copy
 from dataclasses import dataclass
 import math
@@ -83,7 +85,7 @@ class RegressionPredictionCapture:
         self.close()
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Required by the server's pre-3.10 dataclasses.
 class RegTTA3DStepResult:
     updated: bool
     skip_reason: str | None

@@ -15,7 +15,7 @@ class RegTTA3DMathError(ValueError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Required by the server's pre-3.10 dataclasses.
 class NPGNoiseConfig:
     distribution: str
     dimension_magnitude: float
