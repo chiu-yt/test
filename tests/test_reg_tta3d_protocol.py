@@ -14,6 +14,12 @@ def _parse(path):
     return ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
 
 
+def _source(path, node):
+    source = ast.get_source_segment(path.read_text(encoding='utf-8'), node)
+    assert source is not None
+    return source
+
+
 def _function(tree, name):
     matches = [
         node for node in ast.walk(tree)
@@ -44,8 +50,8 @@ def _call_positions(function, terminal_name):
     for node in ast.walk(function):
         if not isinstance(node, ast.Call):
             continue
-        name = ast.unparse(node.func)
-        if name == terminal_name or name.endswith('.' + terminal_name):
+        name = getattr(node.func, 'id', getattr(node.func, 'attr', None))
+        if name == terminal_name:
             positions.append((node.lineno, name))
     return sorted(positions)
 
@@ -55,7 +61,7 @@ def test_dispatch_selects_independent_reg_tta3d_evaluator():
     function = _function(_parse(DISPATCH_PATH), 'eval_one_epoch')
 
     # When its routing-bearing source is inspected.
-    source = ast.unparse(function)
+    source = _source(DISPATCH_PATH, function)
 
     # Then Reg-TTA3D has an explicit gated lazy route.
     assert "'reg_tta3d'" in source
@@ -75,7 +81,7 @@ def test_evaluator_records_preupdate_teacher_prediction_before_adaptation():
     assert len(prediction_calls) == 1
     assert len(adaptation_calls) == 1
     assert prediction_calls[0][0] < adaptation_calls[0][0]
-    source = ast.unparse(function)
+    source = _source(EVALUATOR_PATH, function)
     assert 'detach' in source
     assert 'dist_test' in source and 'infer_time' in source and 'STEPS' in source
 
@@ -85,7 +91,7 @@ def test_transfusion_query_capture_is_explicit_and_predecode():
     function = _method(_parse(TRANSFUSION_PATH), 'TransFusionHead', 'forward')
 
     # When the optional query capture and decoder call are ordered.
-    source = ast.unparse(function)
+    source = _source(TRANSFUSION_PATH, function)
 
     # Then Reg-TTA3D clones query predictions before get_bboxes mutates center coordinates.
     assert 'reg_tta3d_capture_queries' in source
@@ -99,7 +105,7 @@ def test_adaptation_batch_removes_target_annotations():
     function = _function(_parse(EVALUATOR_PATH), '_build_adaptation_batch')
 
     # When its explicit exclusion policy is inspected.
-    source = ast.unparse(function)
+    source = _source(EVALUATOR_PATH, function)
 
     # Then target annotations cannot cross into adaptation.
     for key in (

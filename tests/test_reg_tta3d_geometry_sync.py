@@ -12,6 +12,12 @@ def _tree():
     return ast.parse(GEOMETRY_PATH.read_text(encoding='utf-8'), filename=str(GEOMETRY_PATH))
 
 
+def _source(node):
+    source = ast.get_source_segment(GEOMETRY_PATH.read_text(encoding='utf-8'), node)
+    assert source is not None
+    return source
+
+
 def _student_view_function():
     matches = [
         node for node in _tree().body
@@ -31,7 +37,7 @@ def test_student_view_static_contract_synchronizes_multimodal_geometry_and_revox
     function = _student_view_function()
 
     # When it is inspected through stdlib AST only.
-    source = ast.unparse(function)
+    source = _source(function)
 
     # Then one geometry callback runs before voxelization and stale voxel tensors are removed first.
     assert source.count('augment_student_geometry(') == 1
@@ -42,10 +48,10 @@ def test_student_view_static_contract_synchronizes_multimodal_geometry_and_revox
 
     # Then cached teacher voxel tensors cannot be assigned directly into the student view.
     copied_voxels = [
-        ast.unparse(node) for node in ast.walk(function)
+        _source(node) for node in ast.walk(function)
         if isinstance(node, ast.Assign)
-        and any('voxel' in ast.unparse(target) for target in node.targets)
-        and 'teacher_batch' in ast.unparse(node.value)
+        and any('voxel' in _source(target) for target in node.targets)
+        and 'teacher_batch' in _source(node.value)
     ]
     assert copied_voxels == []
 

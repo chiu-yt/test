@@ -12,6 +12,12 @@ def _tree():
     return ast.parse(UTILS_PATH.read_text(encoding='utf-8'), filename=str(UTILS_PATH))
 
 
+def _source(node):
+    source = ast.get_source_segment(UTILS_PATH.read_text(encoding='utf-8'), node)
+    assert source is not None
+    return source
+
+
 def _definition(tree, name):
     matches = [
         node for node in tree.body
@@ -42,10 +48,10 @@ def test_npg_static_contract_locks_equation_threshold_and_query_scope():
     cbu = _function(tree, 'update_cbu_regression_teacher')
 
     # When the NPG definitions are inspected without importing torch.
-    reliability_source = ast.unparse(reliability)
-    deletion_source = ast.unparse(deletion)
-    perturbation_source = ast.unparse(perturbation)
-    config_source = ast.unparse(noise_config)
+    reliability_source = _source(reliability)
+    deletion_source = _source(deletion)
+    perturbation_source = _source(perturbation)
+    config_source = _source(noise_config)
     argument_names = {argument.arg for argument in perturbation.args.args}
 
     # Then Eq. (2), strict R > TAU deletion, and query-box-only noise are explicit.
@@ -62,7 +68,7 @@ def test_npg_static_contract_locks_equation_threshold_and_query_scope():
     assert not ({'points', 'images', 'camera_imgs', 'features', 'labels', 'scores', 'batch_dict'} & argument_names)
     for forbidden in ('points', 'images', 'camera_imgs', 'spatial_features', 'pred_labels', 'pred_scores'):
         assert forbidden not in perturbation_source
-    assert all(token in ast.unparse(cbu) for token in ('alpha', '0.99', '0.999', 'regression'))
+    assert all(token in _source(cbu) for token in ('alpha', '0.99', '0.999', 'regression'))
 
 
 def test_npg_runtime_equation_and_query_box_perturbation_scope():
@@ -110,7 +116,7 @@ def test_crr_static_contract_is_dimension_only_with_paper_hyperparameters():
     crr = _definition(tree, 'compute_crr_dimension_loss')
 
     # When its source is inspected without importing runtime dependencies.
-    source = ast.unparse(crr)
+    source = _source(crr)
 
     # Then the top ratio, margin, and weight defaults are fixed while geometry is l/w/h only.
     assert all(value in source for value in ('0.2', '0.1', '1.0'))
@@ -168,7 +174,7 @@ def test_cbu_static_mapping_clamps_float32_result_to_configured_bounds():
     mapping = _function(_tree(), 'cbu_alpha_from_labels')
 
     # When its scalar return boundary is inspected without importing torch.
-    source = ast.unparse(mapping)
+    source = _source(mapping)
 
     # Then float32 drift is clamped by both caller-provided bounds.
     assert 'mapped_alpha' in source

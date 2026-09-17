@@ -13,6 +13,12 @@ def _tree():
     return ast.parse(CORE_PATH.read_text(encoding='utf-8'), filename=str(CORE_PATH))
 
 
+def _source(node):
+    source = ast.get_source_segment(CORE_PATH.read_text(encoding='utf-8'), node)
+    assert source is not None
+    return source
+
+
 def _function(name):
     matches = [
         node for node in _tree().body
@@ -32,7 +38,7 @@ def test_scope_static_contract_names_only_transfusion_regression_branches():
     function = _function('configure_reg_tta3d_student')
 
     # When its implementation is inspected without importing torch.
-    source = ast.unparse(function)
+    source = _source(function)
 
     # Then all five regression branches are selected and classification paths are absent.
     assert all(branch in source for branch in EXPECTED_BRANCHES)
@@ -48,7 +54,7 @@ def test_initialization_static_contract_separates_teacher_and_student():
     function = _function('initialize_reg_tta3d_models')
 
     # When clone, mode, and gradient operations are inspected.
-    source = ast.unparse(function)
+    source = _source(function)
 
     # Then teacher/student are independent and teacher remains gradient-free.
     assert 'deepcopy' in source
