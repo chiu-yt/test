@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - ordered online evaluation keeps timing and SAM boundaries auditable.
 import time
 
 import torch
@@ -14,6 +15,7 @@ from pcdet.tta_methods.sar_utils import (
 from pcdet.tta_methods.tent_entropy import extract_detection_entropy
 from pcdet.tta_methods.tent_hooks import TransFusionLogitCapture
 from pcdet.tta_methods.tent_utils import unwrap_model
+from pcdet.utils.efficiency_profiler import EfficiencyProfiler, EfficiencyProfileRun
 from .eval_utils import (
     _init_class_counter,
     _update_pred_class_counter_from_annos,
@@ -99,6 +101,23 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
     optimizer = build_sar_optimizer(params, sar_cfg)
     use_sigmoid = _head_uses_sigmoid(model, cfg)
     adapter = SAR(model, optimizer, sar_cfg, use_sigmoid=use_sigmoid)
+    profiler = EfficiencyProfiler(
+        cfg.TTA.get('EFFICIENCY_PROFILE', {}),
+        EfficiencyProfileRun(
+            method='sar',
+            entrypoint='test.py',
+            config=str(cfg.TAG),
+            boundary=(
+                'prediction forward plus adapter.adapt SAM/update online work; '
+                'excludes dataloader iteration, load_data_to_gpu, prediction '
+                'serialization, progress/logging, pickle, and dataset evaluation'
+            ),
+            output_dir=result_dir,
+            model_parameters=model.parameters(),
+            optimizer=optimizer,
+        ),
+        logger=logger,
+    )
     logger.info('[SAR] parameters total=%d trainable=%d percentage=%.6f%%' % (
         total_count, trainable_count, 100.0 * trainable_count / max(total_count, 1)
     ))
@@ -144,6 +163,8 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
         batch_start = time.time()
         load_data_to_gpu(original_batch)
         prediction_batch = _build_adaptation_batch(original_batch)
+        profiler.begin_batch(original_batch['batch_size'])
+        profiler.begin_segment()
         with torch.enable_grad():
             with TransFusionLogitCapture(model) as capture:
                 pred_dicts, _ = model(prediction_batch)
@@ -153,6 +174,7 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
             first_entropy, hmax = extract_detection_entropy(
                 logits, mode=adapter.entropy_mode
             )
+        profiler.end_segment()
         annos = dataset.generate_prediction_dicts(
             original_batch, pred_dicts, class_names,
             output_path=final_output_dir if args.save_to_file else None,
@@ -161,6 +183,7 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
         display = {}
         _update_pred_class_counter_from_annos(annos, pred_class_counter)
 
+        profiler.begin_segment()
         proposal_ids = capture.proposal_ids
         if proposal_ids is None:
             raise SARProposalAlignmentError(
@@ -180,6 +203,8 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
             batch_idx=batch_idx,
         )
         step_result = adapter.adapt(step)
+        profiler.end_segment()
+        profiler.end_batch()
 
         for key in ('proposal_count', 'first_selected', 'second_candidates', 'second_selected'):
             aggregate[key] += getattr(step_result, key)
@@ -221,6 +246,7 @@ def eval_sar_one_epoch(cfg, args, model, dataloader, epoch_id, logger,
             progress_bar.update()
         del step, first_entropy, logits, capture, prediction_batch
 
+    profiler.finalize()
     if progress_bar is not None:
         progress_bar.close()
     log_sar_logit_summary(logger, aggregate)

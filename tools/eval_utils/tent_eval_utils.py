@@ -1,3 +1,4 @@
+# noqa: SIZE_OK - ordered online evaluation keeps timing and update boundaries auditable.
 import math
 import pickle
 import time
@@ -18,6 +19,11 @@ from pcdet.tta_methods.tent_utils import (
     trainable_parameter_names,
     unwrap_model,
 )
+from pcdet.utils.efficiency_profiler import (
+    EfficiencyProfiler,
+    EfficiencyProfileRun,
+)
+from pcdet.utils.inference_utils import forward_without_annotations
 from .eval_utils import (
     _init_class_counter,
     _update_gt_class_counter_from_batch,
@@ -85,6 +91,12 @@ def _log_param_debug(logger, before_params, model, trainable_names):
 
 def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=False, result_dir=None):
     tent_cfg = cfg.TTA.TENT
+    profile_cfg = cfg.TTA.get('EFFICIENCY_PROFILE', {})
+    profile_enabled = bool(profile_cfg.get('ENABLED', False))
+    if profile_enabled and dist_test:
+        raise NotImplementedError('Efficiency profiling requires dist_test=False')
+    if profile_enabled and getattr(args, 'infer_time', False):
+        raise NotImplementedError('Efficiency profiling does not support infer_time')
     if dist_test and not bool(tent_cfg.get('ALLOW_DDP', False)):
         raise NotImplementedError('Tent online eval is single-process by default; set TTA.TENT.ALLOW_DDP True only after validating rank-local ordering')
     if result_dir is None:
@@ -114,6 +126,24 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
     if not params:
         raise RuntimeError('Tent found no BN-family affine parameters to optimize')
     optimizer = build_tent_optimizer(params, tent_cfg)
+    profiler = EfficiencyProfiler(
+        profile_cfg,
+        EfficiencyProfileRun(
+            method='tent',
+            entrypoint='test.py',
+            config=str(cfg.TAG),
+            boundary=(
+                'prediction forward plus entropy backward, gradient clipping, '
+                'and optimizer online work; excludes dataloader iteration, '
+                'load_data_to_gpu, prediction serialization, progress/logging, '
+                'pickle, and dataset evaluation'
+            ),
+            output_dir=result_dir,
+            model_parameters=model.parameters(),
+            optimizer=optimizer,
+        ),
+        logger=logger,
+    )
     model_state = optimizer_state = None
     if bool(tent_cfg.get('EPISODIC', False)):
         model_state, optimizer_state = snapshot_tent_state(model, optimizer)
@@ -146,14 +176,18 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
         if updates_enabled:
             optimizer.zero_grad()
 
+        profiler.begin_batch(batch_dict['batch_size'])
+        profiler.begin_segment()
         with grad_context:
             with TransFusionLogitCapture(model) as capture:
-                pred_dicts, ret_dict = model(batch_dict)
+                pred_dicts, ret_dict = forward_without_annotations(model, batch_dict)
             pred_dicts_for_eval = _detach_tensor_tree(pred_dicts)
+            profiler.end_segment()
             annos = dataset.generate_prediction_dicts(
                 batch_dict, pred_dicts_for_eval, class_names,
                 output_path=final_output_dir if args.save_to_file else None
             )
+            profiler.begin_segment()
 
             loss = None
             loss_diag = {
@@ -198,6 +232,8 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
                 optimizer.zero_grad()
                 break
 
+        profiler.end_segment()
+        profiler.end_batch()
         if before_params is not None:
             _log_param_debug(logger, before_params, model, trainable_parameter_names(model))
 
@@ -223,6 +259,7 @@ def eval_tent_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_tes
             progress_bar.set_postfix(disp_dict)
             progress_bar.update()
 
+    profiler.finalize()
     if progress_bar is not None:
         progress_bar.close()
 

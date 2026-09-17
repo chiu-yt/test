@@ -7,6 +7,11 @@ import tqdm
 
 from pcdet.models import load_data_to_gpu
 from pcdet.utils import common_utils
+from pcdet.utils.efficiency_profiler import (
+    EfficiencyProfiler,
+    EfficiencyProfileRun,
+)
+from pcdet.utils.inference_utils import forward_without_annotations
 
 
 def _init_class_counter(class_names):
@@ -131,6 +136,13 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
             dist_test=dist_test, result_dir=result_dir
         )
 
+    profile_cfg = cfg.get('TTA', {}).get('EFFICIENCY_PROFILE', {})
+    profile_enabled = bool(profile_cfg.get('ENABLED', False))
+    if profile_enabled and dist_test:
+        raise NotImplementedError('Efficiency profiling requires dist_test=False')
+    if profile_enabled and getattr(args, 'infer_time', False):
+        raise NotImplementedError('Efficiency profiling does not support infer_time')
+
     result_dir.mkdir(parents=True, exist_ok=True)
 
     final_output_dir = result_dir / 'final_result' / 'data'
@@ -164,6 +176,23 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
                 broadcast_buffers=False
         )
     model.eval()
+    profiler = EfficiencyProfiler(
+        profile_cfg,
+        EfficiencyProfileRun(
+            method='source_only',
+            entrypoint='test.py',
+            config=str(cfg.TAG),
+            boundary=(
+                'prediction forward online work; excludes dataloader iteration, '
+                'load_data_to_gpu, prediction serialization, progress/logging, '
+                'pickle, and dataset evaluation'
+            ),
+            output_dir=result_dir,
+            model_parameters=model.parameters(),
+            updated_parameters=(),
+        ),
+        logger=logger,
+    )
 
     if cfg.LOCAL_RANK == 0:
         progress_bar = tqdm.tqdm(total=len(dataloader), leave=True, desc='eval', dynamic_ncols=True)
@@ -175,8 +204,12 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
         if getattr(args, 'infer_time', False):
             start_time = time.time()
 
+        profiler.begin_batch(batch_dict['batch_size'])
+        profiler.begin_segment()
         with torch.no_grad():
-            pred_dicts, ret_dict = model(batch_dict)
+            pred_dicts, ret_dict = forward_without_annotations(model, batch_dict)
+        profiler.end_segment()
+        profiler.end_batch()
 
         disp_dict = {}
 
@@ -197,6 +230,7 @@ def eval_one_epoch(cfg, args, model, dataloader, epoch_id, logger, dist_test=Fal
             progress_bar.set_postfix(disp_dict)
             progress_bar.update()
 
+    profiler.finalize()
     if cfg.LOCAL_RANK == 0:
         progress_bar.close()
 

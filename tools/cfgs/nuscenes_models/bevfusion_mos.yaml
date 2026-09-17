@@ -269,6 +269,12 @@ TTA:
     ALPHA: 0.2
     MATCH_THRESHOLD: 0.24
 
+    EFFICIENCY_PROFILE:
+        ENABLED: False
+        WARMUP_ITERS: 20
+        MEASURE_ITERS: 200
+        OUTPUT_NAME: efficiency_profile.json
+
     # 当前默认最优记录（S1）
     # best ckpt: checkpoint_iter_10.pth
     # best metric: NDS=0.4116, mAP=0.3580

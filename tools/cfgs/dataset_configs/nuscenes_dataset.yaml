@@ -35,6 +35,7 @@ CORRUPTION:
         ENABLED: False
         SEVERITY: 1
         MODE: random_keep
+        SEED: 1024
     IMAGE_STYLE:
         ENABLED: False
         SEVERITY: 1

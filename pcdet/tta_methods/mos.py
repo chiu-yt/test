@@ -14,6 +14,7 @@ from pcdet.config import cfg
 from pcdet.models import load_data_to_gpu, build_network
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils, box_utils
+from pcdet.utils.inference_utils import forward_without_annotations
 from pcdet.utils.hard_pseudo_mining import hard_pseudo_mining
 from pcdet.utils.tta_utils import TTA_augmentation, build_tta_density_map
 from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
@@ -128,12 +129,13 @@ class MOS(object):
             self.temp_model_shell.to(device)
             self.temp_model_shell.eval()
 
-    def optimize(self, batch_dict):
+    def optimize(self, batch_dict, data_already_on_gpu=False):
         """
         Single iteration optimization
         """
         # 1. Setup Data & Model
-        load_data_to_gpu(batch_dict)
+        if not data_already_on_gpu:
+            load_data_to_gpu(batch_dict)
         optimizer = batch_dict.get('optimizer') # Passed via hack or need to handle externally
         # Note: In our train_st_utils, we might not have put optimizer in batch_dict.
         # If optimizer is missing, we assume standard backward is handled here but step is outside?
@@ -163,7 +165,7 @@ class MOS(object):
         # 2. Inference for Pseudo Labels (Current Model)
         self.model.eval()
         with torch.no_grad():
-            pred_dicts, _ = self.model(batch_dict)
+            pred_dicts, _ = forward_without_annotations(self.model, batch_dict)
 
         work_pred_dicts = pred_dicts
         self.spcra_stats = _new_spcra_stats(self._spcra_enabled())
@@ -207,7 +209,7 @@ class MOS(object):
             super_model.eval()
             with torch.no_grad():
                 # Inference again with aggregated model
-                p_dicts, _ = super_model(batch_dict)
+                p_dicts, _ = forward_without_annotations(super_model, batch_dict)
                 if self._spcra_enabled():
                     p_dicts, self.spcra_stats = self._run_spcra_diagnostic(batch_dict, p_dicts, super_model)
                 save_pseudo_label_batch(
@@ -398,7 +400,7 @@ class MOS(object):
         was_training = model.training
         model.eval()
         with torch.no_grad():
-            perturbed_pred_dicts, _ = model(disturbed_batch)
+            perturbed_pred_dicts, _ = forward_without_annotations(model, disturbed_batch)
         if was_training:
             model.train()
 
@@ -565,7 +567,7 @@ class MOS(object):
         was_training = self.model.training
         self.model.eval()
         with torch.no_grad():
-            disturbed_pred_dicts, _ = self.model(disturbed_batch)
+            disturbed_pred_dicts, _ = forward_without_annotations(self.model, disturbed_batch)
         if was_training:
             self.model.train()
 
@@ -892,7 +894,7 @@ class MOS(object):
 
                 # Inference current checkpoint model
                 with torch.no_grad():
-                    p_dicts, _ = temp_model_shell(batch_dict)
+                    p_dicts, _ = forward_without_annotations(temp_model_shell, batch_dict)
 
                 feat_vec = self._extract_aggregation_feature(batch_dict, p_dicts, device=device)
                 if feat_vec is None:

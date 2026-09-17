@@ -7,6 +7,7 @@ from pcdet.tta_methods.codemerge_utils import (
     compute_ridge_leverage_weights,
     snapshot_floating_state,
 )
+from pcdet.utils.inference_utils import forward_without_annotations
 from pcdet.tta_methods.mos import MOS
 
 
@@ -42,7 +43,7 @@ class CodeMergeTTA(MOS):
 
                 temp_model_shell.load_state_dict(state_dict, strict=False)
                 with torch.no_grad():
-                    pred_dicts, _ = temp_model_shell(batch_dict)
+                    pred_dicts, _ = forward_without_annotations(temp_model_shell, batch_dict)
 
                 feat_vec = self._extract_aggregation_feature(batch_dict, pred_dicts, device=device)
                 if feat_vec is None:

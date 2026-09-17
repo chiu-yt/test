@@ -4,7 +4,13 @@ import glob
 import tqdm
 import numpy as np
 from torch.nn.utils import clip_grad_norm_
+from pcdet.models import load_data_to_gpu
 from pcdet.utils import common_utils
+from pcdet.utils.efficiency_profiler import (
+    EfficiencyProfileConfigurationError,
+    EfficiencyProfileRun,
+    EfficiencyProfiler,
+)
 from pcdet.tta_methods.codemerge import CodeMergeTTA
 from pcdet.tta_methods.mos import MOS  # 导入你修改的 v31.0 MOS
 
@@ -52,6 +58,39 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
         logger.error("未检测到有效的 TTA 配置，请检查 YAML 文件中的 TTA 字段")
         return
 
+    profile_cfg = tta_cfg.get('EFFICIENCY_PROFILE', {})
+    profile_enabled = bool(profile_cfg.get('ENABLED', False))
+    if profile_enabled and (
+        rank != 0
+        or (
+            torch.distributed.is_initialized()
+            and torch.distributed.get_world_size() > 1
+        )
+    ):
+        raise EfficiencyProfileConfigurationError(
+            'Train-based TTA efficiency profiling requires single-process execution'
+        )
+    run_cfg = kwargs['cfg']
+    config_path = 'cfgs/%s/%s.yaml' % (run_cfg.EXP_GROUP_PATH, run_cfg.TAG)
+    profiler = EfficiencyProfiler(
+        profile_cfg,
+        EfficiencyProfileRun(
+            method='codemerge' if tta_method == 'codemerge' else 'refuse_tta',
+            entrypoint='train.py',
+            config=config_path,
+            boundary=(
+                'synchronized implementation online adaptation including '
+                'method diagnostics and iteration checkpoint-bank writes; '
+                'excludes dataloader iteration, load_data_to_gpu, scheduler, '
+                'outer progress/TensorBoard logging, and epoch archival checkpoint'
+            ),
+            output_dir=ckpt_save_dir.parent,
+            model_parameters=model.parameters(),
+            optimizer=optimizer,
+        ),
+        logger=logger,
+    )
+
     # 与 MOS-main 对齐：按 samples_seen 触发 iter checkpoint
     # SAVE_CKPT 为显式保存点，SAVE_CKPT_INTERVAL 为周期保存点
     save_ckpt_points = set()
@@ -94,6 +133,11 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                 cur_scheduler.step(accumulated_iter)
                 cur_lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 0.0
 
+                if profile_enabled:
+                    load_data_to_gpu(batch_dict)
+                profiler.begin_batch(cur_batch_size)
+                profiler.begin_segment()
+
                 if optimizer is not None:
                     optimizer.zero_grad()
                 
@@ -103,10 +147,16 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                 # 2. 伪标签生成与 Hungarian 匹配
                 # 3. 多模态余弦相似度计算 (Cos-Sim)
                 # 4. 损失计算与反向传播 (Loss Backward)
-                loss, tb_dict, disp_dict = mos_worker.optimize(batch_dict)
+                if profile_enabled:
+                    loss, tb_dict, disp_dict = mos_worker.optimize(
+                        batch_dict, data_already_on_gpu=True
+                    )
+                else:
+                    loss, tb_dict, disp_dict = mos_worker.optimize(batch_dict)
                 if optimizer is not None:
                     clip_grad_norm_(model.parameters(), optim_cfg.GRAD_NORM_CLIP)
                     optimizer.step()
+                profiler.end_segment()
                 # --------------------------
 
                 accumulated_iter += 1
@@ -123,10 +173,14 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                     and ckpt_save_dir is not None
                     and should_save_iter_ckpt
                 ):
+                    profiler.begin_segment()
                     ckpt_name = ckpt_save_dir / ('checkpoint_iter_%d' % samples_seen)
                     state = checkpoint_state(model, optimizer, cur_epoch, accumulated_iter)
                     save_checkpoint(state, filename=ckpt_name)
+                    profiler.end_segment()
                     logger.info(f'MM-MOS: 已保存在线聚合 ckpt -> {ckpt_name}.pth')
+
+                profiler.end_batch()
 
                 # 更新进度条展示信息
                 if rank == 0:
@@ -167,5 +221,6 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                 save_checkpoint(state, filename=ckpt_name)
                 logger.info(f'MM-MOS: 已保存自适应后的模型权重 -> {ckpt_name}.pth')
 
+    profiler.finalize()
     logger.info('='*20 + ' MM-MOS TTA COMPLETED ' + '='*20)
     return accumulated_iter

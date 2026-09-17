@@ -227,6 +227,11 @@ OPTIMIZATION:
 
 TTA:
     ENABLED: False
+    EFFICIENCY_PROFILE:
+        ENABLED: False
+        WARMUP_ITERS: 20
+        MEASURE_ITERS: 200
+        OUTPUT_NAME: efficiency_profile.json
     FREEZE:
         ENABLED: False
         ADAPTER_ONLY: False
