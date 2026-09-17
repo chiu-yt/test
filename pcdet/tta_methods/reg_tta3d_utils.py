@@ -114,7 +114,10 @@ def cbu_alpha_from_labels(labels, num_classes, alpha_min=0.99, alpha_max=0.999):
     variance = proportions.var(unbiased=False)
     maximum_variance = (num_classes - 1.0) / (num_classes * num_classes)
     normalized = torch.clamp(variance / maximum_variance, min=0.0, max=1.0)
-    return float((alpha_min + normalized * (alpha_max - alpha_min)).item())
+    mapped_alpha = float(
+        (alpha_min + normalized * (alpha_max - alpha_min)).item()
+    )
+    return min(alpha_max, max(alpha_min, mapped_alpha))
 
 
 def query_scores(raw_predictions, query_labels, num_classes):

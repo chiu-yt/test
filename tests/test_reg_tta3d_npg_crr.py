@@ -163,6 +163,36 @@ def test_crr_runtime_stops_gradient_through_high_confidence_size_anchor():
     assert bool((boxes.grad[1, 3:6] != 0).all().item())
 
 
+def test_cbu_static_mapping_clamps_float32_result_to_configured_bounds():
+    # Given the class-balance-to-CBU-alpha mapping.
+    mapping = _function(_tree(), 'cbu_alpha_from_labels')
+
+    # When its scalar return boundary is inspected without importing torch.
+    source = ast.unparse(mapping)
+
+    # Then float32 drift is clamped by both caller-provided bounds.
+    assert 'mapped_alpha' in source
+    assert 'min(alpha_max' in source
+    assert 'max(alpha_min' in source
+
+
+def test_cbu_runtime_maximum_variance_stays_inside_configured_bounds():
+    # Given pseudo-labels concentrated entirely in one class.
+    utils = _runtime_utils()
+    torch = importlib.import_module('torch')
+    alpha_min = 0.99
+    alpha_max = 0.999
+
+    # When CBU maps the maximum class-proportion variance in float32.
+    alpha = utils.cbu_alpha_from_labels(
+        torch.zeros(8, dtype=torch.long), 10,
+        alpha_min=alpha_min, alpha_max=alpha_max,
+    )
+
+    # Then the scalar remains acceptable to the strict teacher-update boundary.
+    assert alpha_min <= alpha <= alpha_max
+
+
 def test_cbu_runtime_validates_alpha_and_updates_only_regression_branches():
     # Given teacher and student modules with regression and classification branches at distinct values.
     utils = _runtime_utils()
