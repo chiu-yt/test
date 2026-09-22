@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+from pcdet.utils.figure6_runtime import stage
 
 from pcdet.models.backbones_2d.fuser.tta_fusion_adapter_utils import pick_group_norm_groups, proposal_residual_map, zero_last_affine
 
@@ -143,6 +144,21 @@ class BEVFusionTTAAdapter(nn.Module):
         batch_dict['spatial_features'] = fused_bev + self.residual_scale.type_as(shared_residual) * (
             shared_gate * shared_residual + proposal_residual
         )
+        request = batch_dict.get('_figure6_adapter_request')
+        if request is not None and not request.responses:
+            for index in request.indices:
+                values = {}
+                if density_map is not None and isinstance(density_gate, torch.Tensor):
+                    values = {
+                        'density_map': density_map[index], 'density_gate': density_gate[index],
+                        'shared_gate': shared_gate[index], 'shared_residual': shared_residual[index],
+                        'proposal_residual': proposal_residual[index], 'residual_scale': self.residual_scale,
+                        'delta': batch_dict['spatial_features'][index].detach() - fused_bev[index].detach(),
+                    }
+                request.responses[index] = stage(
+                    values, 'current_pre_update',
+                    '' if values else ('disabled' if not self.sg_dfa_enabled else 'density unavailable'),
+                )
         batch_dict['tta_adapter_gate_mean'] = shared_gate.detach().mean()
         batch_dict['tta_adapter_density_mean'] = density_mean
         batch_dict['tta_adapter_density_nonzero'] = density_nonzero

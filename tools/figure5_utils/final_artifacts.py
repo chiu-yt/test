@@ -6,6 +6,7 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 
 from .domain import SampleToken
+from .crop_manifest import CROP_MANIFEST_NAME, write_crop_manifest
 from .final_rendering import (
     FINAL_DPI, FinalRenderRow, render_density, render_final_detections,
     horizontal_crop, render_final_plate, render_final_row, render_horizontal_plate,
@@ -66,7 +67,8 @@ def artifact_names(tokens: Sequence[SampleToken]) -> Tuple[str, ...]:
         for token in tokens
         for stem in RUNTIME_STEMS
     )
-    return FIGURE5_FILES + HORIZONTAL_FIGURE5_FILES + (MANIFEST_NAME,) + generated + runtime
+    return (FIGURE5_FILES + (CROP_MANIFEST_NAME,) + HORIZONTAL_FIGURE5_FILES +
+            (MANIFEST_NAME,) + generated + runtime)
 
 
 def _manifest(tokens: Sequence[SampleToken], supplied_points: bool) -> StatusManifest:
@@ -151,6 +153,9 @@ def _write_summary(rows: Sequence[FinalRenderRow], output: Path,
         '- Legacy plates retain square crops; `figure5_horizontal_clean.png`, '
         '`figure5_horizontal_clean.pdf`, `figure5_horizontal_callout.png`, and '
         '`figure5_horizontal_callout.pdf` use one shared content-aware horizontal crop per row.',
+        '- `figure5_crop_manifest.json` freezes full-precision square/horizontal crops and '
+        'callout ROIs in the canonical LiDAR frame for Figure 6 reuse; the values below '
+        'are rounded for display only.',
         '- ' + point_text,
         '',
         '## Fixed rows',
@@ -190,7 +195,7 @@ def _write_summary(rows: Sequence[FinalRenderRow], output: Path,
         'Runtime-only SPCRA, RG-PLM, and SG-DFA images are not reconstructed from aggregate logs.',
         '',
     ])
-    (output / FIGURE5_FILES[-1]).write_text('\n'.join(lines), encoding='utf-8')
+    (output / 'figure5_refine_summary.md').write_text('\n'.join(lines), encoding='utf-8')
 
 
 def export_final_artifacts(rows: Sequence[FinalRenderRow], output: Path,
@@ -225,6 +230,7 @@ def export_final_artifacts(rows: Sequence[FinalRenderRow], output: Path,
         _save_single_png(render_density(row), output / ('density_%s.png' % token))
         _save_single_png(render_final_detections(row), output / ('finaldet_%s.png' % token))
     _write_summary(rows, output, supplied_points)
+    write_crop_manifest(rows, output, ROW_PURPOSES)
     write_status_manifest(
         output, tuple(row.selection.frame.sample_token for row in rows), supplied_points,
     )

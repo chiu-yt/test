@@ -6,6 +6,7 @@ import numpy as np
 from torch.nn.utils import clip_grad_norm_
 from pcdet.models import load_data_to_gpu
 from pcdet.utils import common_utils
+from pcdet.utils.figure6_stream import Figure6StreamCapture
 from pcdet.utils.efficiency_profiler import (
     EfficiencyProfileConfigurationError,
     EfficiencyProfileRun,
@@ -40,6 +41,7 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
     MM-MOS Test-Time Adaptation 训练入口
     """
     accumulated_iter = start_iter
+    figure6_capture = None
 
     # 1. 初始化 MM-MOS 控制器
     if tta_cfg and tta_cfg.ENABLED:
@@ -49,7 +51,12 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
         # 实例化我们在 pcdet/tta_methods/mos.py 中定义的 MOS 类
         tta_method = str(tta_cfg.get('METHOD', 'mos')).lower()
         worker_cls = CodeMergeTTA if tta_method == 'codemerge' else MOS
-        mos_worker = worker_cls(model, tta_cfg, logger, dataset=train_loader.dataset)
+        worker_kwargs = {}
+        if tta_cfg.get('FIGURE6_CAPTURE', {}).get('ENABLED', False):
+            figure6_capture = Figure6StreamCapture(
+                kwargs['cfg'], kwargs.get('capture_provenance', {}), (ckpt_save_dir, rank))
+            worker_kwargs['figure6_collector'] = figure6_capture.collector
+        mos_worker = worker_cls(model, tta_cfg, logger, dataset=train_loader.dataset, **worker_kwargs)
         # 将当前 run 的 ckpt_dir 显式传给 MOS，避免 _find_ckpt_dir 误命中历史目录
         if ckpt_save_dir is not None:
             mos_worker.run_ckpt_dir = str(ckpt_save_dir)
@@ -128,6 +135,9 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                 cur_batch_size = int(batch_dict.get('batch_size', getattr(train_loader, 'batch_size', 1)))
                 samples_seen = int(it) * max(cur_batch_size, 1)
                 batch_dict['samples_seen'] = samples_seen
+                if figure6_capture is not None:
+                    figure6_capture.begin(
+                        batch_dict, (cur_epoch, accumulated_iter, samples_seen, cur_batch_size))
 
                 # 步进学习率
                 cur_scheduler.step(accumulated_iter)
@@ -153,6 +163,8 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                     )
                 else:
                     loss, tb_dict, disp_dict = mos_worker.optimize(batch_dict)
+                if figure6_capture is not None:
+                    figure6_capture.finish()
                 if optimizer is not None:
                     clip_grad_norm_(model.parameters(), optim_cfg.GRAD_NORM_CLIP)
                     optimizer.step()

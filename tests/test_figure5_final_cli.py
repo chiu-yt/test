@@ -85,10 +85,14 @@ def test_fixed_token_cli_exports_only_declared_offline_artifacts(tmp_path: Path)
         'figure5_horizontal_clean.pdf', 'figure5_horizontal_callout.pdf',
         'figure5_row1.png', 'figure5_row2.png', 'figure5_row3.png',
         'figure5_refine_summary.md', 'figure6_status_manifest.json',
+        'figure5_crop_manifest.json',
     }
     expected.update('density_%s.png' % token for token in tokens)
     expected.update('finaldet_%s.png' % token for token in tokens)
     assert {path.name for path in output.iterdir()} == expected
+    crops = json.loads((output / 'figure5_crop_manifest.json').read_text())
+    assert [row['sample_token'] for row in crops['rows']] == list(tokens)
+    assert [row['row_number'] for row in crops['rows']] == [1, 2, 3]
     manifest = json.loads((output / 'figure6_status_manifest.json').read_text())
     assert manifest['point_provenance']['mode'] == 'supplied_sparse_npy_unverified'
     assert manifest['point_provenance']['exact_dataloader_replay'] is False

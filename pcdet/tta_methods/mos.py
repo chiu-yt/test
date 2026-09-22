@@ -6,6 +6,8 @@ import glob
 import numpy as np
 import re
 from collections import OrderedDict
+from contextlib import nullcontext
+from typing import Optional
 from torch.nn import functional as F
 from torch.nn.utils import clip_grad_norm_
 from scipy.optimize import linear_sum_assignment
@@ -15,6 +17,7 @@ from pcdet.models import load_data_to_gpu, build_network
 from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils, box_utils
 from pcdet.utils.inference_utils import forward_without_annotations
+from pcdet.utils.figure6_runtime import Figure6RuntimeCollector
 from pcdet.utils.hard_pseudo_mining import hard_pseudo_mining
 from pcdet.utils.tta_utils import TTA_augmentation, build_tta_density_map
 from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
@@ -75,7 +78,8 @@ def _new_rg_plm_stats(enabled):
 
 
 class MOS(object):
-    def __init__(self, model, tta_cfg, logger, dataset=None): # 添加 dataset 参数
+    def __init__(self, model, tta_cfg, logger, dataset=None, figure6_collector: Optional[Figure6RuntimeCollector] = None):
+        self.figure6_collector = figure6_collector
         self.model = model
         self.tta_cfg = tta_cfg
         self.logger = logger
@@ -154,6 +158,9 @@ class MOS(object):
             self.total_samples_seen += b_size
 
         self._prepare_sg_dfa_density_map(batch_dict)
+        observer = self.figure6_collector
+        if observer is not None:
+            observer.inputs(batch_dict)
 
         # 诊断：记录注入伪标签前的 GT 类别分布（若 batch 中存在真实标签）
         gt_hist = self._collect_hist_from_gt_boxes(batch_dict.get('gt_boxes', None))
@@ -164,18 +171,23 @@ class MOS(object):
 
         # 2. Inference for Pseudo Labels (Current Model)
         self.model.eval()
-        with torch.no_grad():
+        with torch.no_grad(), (observer.first_forward(batch_dict) if observer is not None else nullcontext()):
             pred_dicts, _ = forward_without_annotations(self.model, batch_dict)
+            if observer is not None:
+                observer.final_detection(pred_dicts)
 
         work_pred_dicts = pred_dicts
         self.spcra_stats = _new_spcra_stats(self._spcra_enabled())
         if self._spcra_enabled():
             work_pred_dicts, self.spcra_stats = self._run_spcra_diagnostic(batch_dict, pred_dicts)
+            if observer is not None:
+                observer.spcra(work_pred_dicts, 'current_pre_update')
         
         # Save raw pseudo labels（A8: 恢复与原版 MOS 一致的 memory-ensemble 语义）
         need_update = self._should_memory_update()
         save_pseudo_label_batch(
-            batch_dict, work_pred_dicts, need_update=need_update
+            batch_dict, work_pred_dicts, need_update=need_update,
+            observer=observer, pass_owner='current_pre_update',
         )
         self.rg_plm_stats = _get_rg_plm_stats()
 
@@ -212,8 +224,11 @@ class MOS(object):
                 p_dicts, _ = forward_without_annotations(super_model, batch_dict)
                 if self._spcra_enabled():
                     p_dicts, self.spcra_stats = self._run_spcra_diagnostic(batch_dict, p_dicts, super_model)
+                    if observer is not None:
+                        observer.spcra(p_dicts, 'aggregated_pseudo_source')
                 save_pseudo_label_batch(
-                    batch_dict, p_dicts, need_update=need_update
+                    batch_dict, p_dicts, need_update=need_update,
+                    observer=observer, pass_owner='aggregated_pseudo_source',
                 )
                 self.rg_plm_stats = _get_rg_plm_stats()
             del super_model
@@ -996,10 +1011,14 @@ class MOS(object):
 
         # 必须保证 batch 内每个 frame 都有 pseudo label，否则直接跳过本次注入
         if not all(fid in NEW_PSEUDO_LABELS for fid in fids):
+            if self.figure6_collector is not None:
+                self.figure6_collector.injection(None, 'missing_frame_ids')
             return
 
         max_box = max([len(NEW_PSEUDO_LABELS[fid]['gt_boxes']) for fid in fids])
         if max_box <= 0:
+            if self.figure6_collector is not None:
+                self.figure6_collector.injection(None, 'empty_pseudo_labels')
             return
 
         # 统一使用 10 列: [x,y,z,dx,dy,dz,yaw,vx,vy,cls]
@@ -1116,6 +1135,11 @@ class MOS(object):
         if hpm_enabled:
             batch_dict['tta_pseudo_weights'] = ps_weights_batch
             batch_dict['tta_pseudo_reg_weights'] = ps_reg_weights_batch
+        if self.figure6_collector is not None:
+            assigned = {'gt_boxes': ps_batch}
+            if hpm_enabled:
+                assigned.update(tta_pseudo_weights=ps_weights_batch, tta_pseudo_reg_weights=ps_reg_weights_batch)
+            self.figure6_collector.injection(assigned)
 
     def _find_ckpt_dir(self):
         # Auto-detect checkpoint directory based on current working setup (fallback only)
@@ -1565,7 +1589,8 @@ def aggregate_model_via_state_dict(model_path_list, model_weights, dataset, ram_
                     
     return agg_model.to(device).eval()
 
-def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
+def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False,
+                          observer: Optional[Figure6RuntimeCollector] = None, pass_owner='current_pre_update'):
     """
     兼容原版 MOS 语义：
     1) 先按阈值生成当前 batch 伪标签
@@ -1610,12 +1635,18 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             NEW_PSEUDO_LABELS[fid] = _apply_adaptive_noisy_class_cap(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_nan_box_filter(NEW_PSEUDO_LABELS[fid])
             NEW_PSEUDO_LABELS[fid] = _apply_hard_pseudo_mining(NEW_PSEUDO_LABELS[fid])
+            if observer is not None:
+                observer.pseudo(fid, NEW_PSEUDO_LABELS[fid], (pass_owner, 'rg_plm_before'))
             NEW_PSEUDO_LABELS[fid] = _apply_rg_plm(NEW_PSEUDO_LABELS[fid])
+            if observer is not None:
+                observer.pseudo(fid, NEW_PSEUDO_LABELS[fid], (pass_owner, 'rg_plm_after'))
 
     mem_cfg = cfg.SELF_TRAIN.get('MEMORY_ENSEMBLE', None)
     if mem_cfg is None or not bool(mem_cfg.get('ENABLED', False) and need_update):
         # 不做融合时，同步覆盖历史缓存
         PSEUDO_LABELS.update(NEW_PSEUDO_LABELS)
+        if observer is not None:
+            observer.effective(NEW_PSEUDO_LABELS, pass_owner)
         return
 
     ens_name = mem_cfg.get('NAME', 'consistency_ensemble')
@@ -1623,6 +1654,8 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
     if ensemble_func is None:
         # 配置名无效时降级为不融合
         PSEUDO_LABELS.update(NEW_PSEUDO_LABELS)
+        if observer is not None:
+            observer.effective(NEW_PSEUDO_LABELS, pass_owner)
         return
 
     frame_ids = input_dict.get('frame_id', [])
@@ -1640,6 +1673,8 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False):
             PSEUDO_LABELS[fid] = merged
         else:
             PSEUDO_LABELS[fid] = _apply_nan_box_filter(cur_infos)
+    if observer is not None:
+        observer.effective(NEW_PSEUDO_LABELS, pass_owner)
 
 
 def _apply_class_topk_filter(gt_infos):

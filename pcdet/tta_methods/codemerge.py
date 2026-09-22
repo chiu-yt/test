@@ -12,8 +12,8 @@ from pcdet.tta_methods.mos import MOS
 
 
 class CodeMergeTTA(MOS):
-    def __init__(self, model, tta_cfg, logger, dataset=None):
-        super().__init__(model, tta_cfg, logger, dataset=dataset)
+    def __init__(self, model, tta_cfg, logger, dataset=None, figure6_collector=None):
+        super().__init__(model, tta_cfg, logger, dataset=dataset, figure6_collector=figure6_collector)
         self.codemerge_source_state = snapshot_floating_state(model)
         code_cfg = self.tta_cfg.get('CODEMERGE_SETTING', None)
         select_topk = int(code_cfg.get('SELECT_TOPK', 5)) if code_cfg is not None else 5

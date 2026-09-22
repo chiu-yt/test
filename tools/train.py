@@ -1,7 +1,6 @@
 import _init_path
 import argparse
 import datetime
-import glob
 import os
 import types
 from pathlib import Path
@@ -259,15 +258,8 @@ def main():
         'cfg': cfg
     }
 
-    # --- 根据 TTA 开关选择不同的训练入口 ---
-    if cfg.get('TTA', None) and cfg.TTA.ENABLED:
-        from train_utils.train_st_utils import train_model_st
-        logger.info('理论复现：已成功挂载 TTA 自适应训练流程 (MM-MOS)')
-        train_model_st(tta_cfg=cfg.TTA, **train_kwargs)
-    else:
-        from train_utils.train_utils import train_model
-        logger.info('执行标准有监督训练流程')
-        train_model(**train_kwargs)
+    from train_utils.training_launch import launch_training
+    launch_training(cfg, args, train_kwargs)
 
     # --- 训练结束后的清理与评估 ---
     if hasattr(train_set, 'use_shared_memory') and train_set.use_shared_memory:

@@ -264,6 +264,13 @@ OPTIMIZATION:
 
 # ================= MOS 核心参数 =================
 TTA:
+    FIGURE6_CAPTURE:
+        ENABLED: False
+        OUTPUT_DIR: ''
+        TOKENS:
+            - '9a476217cc324813a5760c9852643324'
+            - '3425c66163af46cca4c96006d425e0eb'
+            - '2128fc958907421ca888ab014a73348a'
     ENABLED: True
     METHOD: mos
     ALPHA: 0.2
