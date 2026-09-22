@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from .domain import SampleToken
 from .final_rendering import (
     FINAL_DPI, FinalRenderRow, render_density, render_final_detections,
-    render_final_plate, render_final_row,
+    horizontal_crop, render_final_plate, render_final_row, render_horizontal_plate,
 )
 from .final_selection import FINAL_SAMPLE_TOKENS
 
@@ -22,6 +22,12 @@ FIGURE5_FILES: Final[Tuple[str, ...]] = (
     'figure5_row2.png',
     'figure5_row3.png',
     'figure5_refine_summary.md',
+)
+HORIZONTAL_FIGURE5_FILES: Final[Tuple[str, ...]] = (
+    'figure5_horizontal_clean.png',
+    'figure5_horizontal_callout.png',
+    'figure5_horizontal_clean.pdf',
+    'figure5_horizontal_callout.pdf',
 )
 MANIFEST_NAME: Final[str] = 'figure6_status_manifest.json'
 RUNTIME_STEMS: Final[Tuple[str, ...]] = ('reliability', 'rgplm', 'sgdfa')
@@ -60,7 +66,7 @@ def artifact_names(tokens: Sequence[SampleToken]) -> Tuple[str, ...]:
         for token in tokens
         for stem in RUNTIME_STEMS
     )
-    return FIGURE5_FILES + (MANIFEST_NAME,) + generated + runtime
+    return FIGURE5_FILES + HORIZONTAL_FIGURE5_FILES + (MANIFEST_NAME,) + generated + runtime
 
 
 def _manifest(tokens: Sequence[SampleToken], supplied_points: bool) -> StatusManifest:
@@ -113,7 +119,7 @@ def _save_png(figure: Figure, path: Path) -> None:
 
 def _save_pdf(figure: Figure, path: Path) -> None:
     figure.savefig(
-        str(path), facecolor='white',
+        str(path), dpi=FINAL_DPI, facecolor='white',
         metadata={
             'Creator': 'OpenPCDet Figure 5 exporter',
             'CreationDate': None,
@@ -142,7 +148,9 @@ def _write_summary(rows: Sequence[FinalRenderRow], output: Path,
         '',
         '- The final plate uses a fixed 3 x 4 GT / Source-only / CodeMerge / ReFuse-TTA layout.',
         '- `figure5_row1.png`, `figure5_row2.png`, and `figure5_row3.png` are callout versions.',
-        '- Clean and callout plates reuse the same sparse points and one square crop per row.',
+        '- Legacy plates retain square crops; `figure5_horizontal_clean.png`, '
+        '`figure5_horizontal_clean.pdf`, `figure5_horizontal_callout.png`, and '
+        '`figure5_horizontal_callout.pdf` use one shared content-aware horizontal crop per row.',
         '- ' + point_text,
         '',
         '## Fixed rows',
@@ -150,11 +158,12 @@ def _write_summary(rows: Sequence[FinalRenderRow], output: Path,
     ]
     for row in rows:
         selection = row.selection
-        lines.append('- Row %d `%s`: %s; crop=%s.' % (
+        lines.append('- Row %d `%s`: %s; crop=%s; horizontal_crop=%s.' % (
             selection.row_number,
             selection.frame.sample_token,
             ROW_PURPOSES[selection.row_number - 1],
             tuple(round(value, 3) for value in selection.crop),
+            tuple(round(value, 3) for value in horizontal_crop(row)),
         ))
         for callout_index, callout in enumerate(selection.callouts, 1):
             lines.append('  - Callout %d: type=%s; class=%s; distance_m=%.2f; roi=%s.' % (
@@ -198,6 +207,18 @@ def export_final_artifacts(rows: Sequence[FinalRenderRow], output: Path,
         _save_pdf(callout, output / FIGURE5_FILES[3])
     finally:
         plt.close(callout)
+    horizontal_clean = render_horizontal_plate(rows, show_callouts=False)
+    try:
+        _save_png(horizontal_clean, output / HORIZONTAL_FIGURE5_FILES[0])
+        _save_pdf(horizontal_clean, output / HORIZONTAL_FIGURE5_FILES[2])
+    finally:
+        plt.close(horizontal_clean)
+    horizontal_callout = render_horizontal_plate(rows, show_callouts=True)
+    try:
+        _save_png(horizontal_callout, output / HORIZONTAL_FIGURE5_FILES[1])
+        _save_pdf(horizontal_callout, output / HORIZONTAL_FIGURE5_FILES[3])
+    finally:
+        plt.close(horizontal_callout)
     for row in rows:
         token = row.selection.frame.sample_token
         _save_single_png(render_final_row(row), output / ('figure5_row%d.png' % row.selection.row_number))

@@ -81,6 +81,8 @@ def test_fixed_token_cli_exports_only_declared_offline_artifacts(tmp_path: Path)
     expected = {
         'figure5_final_clean.png', 'figure5_final_clean.pdf',
         'figure5_final_callout.png', 'figure5_final_callout.pdf',
+        'figure5_horizontal_clean.png', 'figure5_horizontal_callout.png',
+        'figure5_horizontal_clean.pdf', 'figure5_horizontal_callout.pdf',
         'figure5_row1.png', 'figure5_row2.png', 'figure5_row3.png',
         'figure5_refine_summary.md', 'figure6_status_manifest.json',
     }
@@ -99,6 +101,7 @@ def test_fixed_token_cli_exports_only_declared_offline_artifacts(tmp_path: Path)
     assert 'localization / false-positive improvement' in summary
     assert 'distance_m=' in summary
     assert 'roi=' in summary
+    assert summary.count('horizontal_crop=') == 3
     for token in tokens:
         assert 'density_%s.png' % token in summary
         assert 'reliability_%s.png' % token in summary

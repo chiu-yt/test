@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import matplotlib
@@ -17,6 +18,7 @@ from tools.figure5_utils.domain import (
 from tools.figure5_utils.final_artifacts import (
     artifact_names, publish_final_artifacts, write_status_manifest,
 )
+from tools.figure5_utils import final_artifacts, final_rendering
 from tools.figure5_utils.final_rendering import FinalRenderRow, render_final_plate, render_final_row
 from tools.figure5_utils.final_selection import (
     FINAL_SAMPLE_TOKENS, FinalSelectionError, select_final_rows,
@@ -54,6 +56,12 @@ def _valid_candidates(row3_kind=CalloutKind.BETTER_LOCALIZATION):
             _callout(row3_kind, (-12.0, -10.0, -5.0, -3.0)),
         )),
     }
+
+
+def _render_rows():
+    points = np.array([[35.0, 0.0, 0.0, 1.0, 0.0]])
+    return tuple(FinalRenderRow(selection, points)
+                 for selection in select_final_rows(_valid_candidates()))
 
 
 def test_final_rows_keep_fixed_order_categories_and_square_crops():
@@ -117,9 +125,8 @@ def test_final_rows_fail_when_required_visible_evidence_is_absent(roi):
 
 def test_final_plate_has_top_only_titles_shared_row_geometry_and_callout_artists():
     # Given three selected rows using one point array and crop per row.
-    points = np.array([[35.0, 0.0, 0.0, 1.0, 0.0]])
-    selections = select_final_rows(_valid_candidates())
-    rows = tuple(FinalRenderRow(selection, points) for selection in selections)
+    rows = _render_rows()
+    selections = tuple(row.selection for row in rows)
 
     # When clean and callout final plates are rendered.
     clean = render_final_plate(rows, show_callouts=False)
@@ -148,6 +155,114 @@ def test_final_plate_has_top_only_titles_shared_row_geometry_and_callout_artists
     plt.close(row_figure)
 
 
+def test_horizontal_crop_excludes_unrelated_box_and_includes_boundary_crossing_box():
+    # Given an inside box, an oriented boundary-crossing box, and a fully unrelated box.
+    selection = select_final_rows(_valid_candidates())[0]
+    token = str(selection.frame.sample_token)
+    inside = _detection(token, (35.0, 0.0, 0.0))
+    unrelated = _detection(token, (-35.0, 40.0, 0.0))
+    boundary = replace(
+        inside,
+        box=Box3D(
+            (selection.crop[0] - 1.5, 0.0, 0.0),
+            (4.0, 2.0, 1.7), YawRadians(np.pi / 12.0),
+        ),
+    )
+    frame_with_unrelated = replace(
+        selection.frame,
+        ground_truth=(inside,), source_only=(unrelated,),
+        codemerge=(boundary,), refuse_tta=(inside,),
+    )
+    frame_without_unrelated = replace(frame_with_unrelated, source_only=())
+    row = FinalRenderRow(replace(selection, frame=frame_with_unrelated),
+                         np.zeros((0, 5), dtype=float))
+    reference_row = replace(row, selection=replace(selection, frame=frame_without_unrelated))
+    row_without_boundary = replace(
+        row, selection=replace(selection, frame=replace(frame_without_unrelated, codemerge=())),
+    )
+
+    # When the rendering-only crops are computed.
+    crop = final_rendering.horizontal_crop(row)
+    reference_crop = final_rendering.horizontal_crop(reference_row)
+
+    # Then the unrelated box changes nothing while the crossing box contributes with 4 m context.
+    boundary_corners = final_rendering._box_bev_corners(boundary)
+    x_min, y_min, x_max, y_max = crop
+    assert crop == pytest.approx(reference_crop)
+    assert crop != pytest.approx(final_rendering.horizontal_crop(row_without_boundary))
+    assert x_min <= float(boundary_corners[:, 0].min()) - 4.0
+    assert (y_max - y_min) / (x_max - x_min) == pytest.approx(1.8)
+    assert row.selection.crop == selection.crop
+    assert row.selection.callouts == selection.callouts
+
+
+def test_horizontal_crop_derives_from_legacy_crop_when_row_has_no_content():
+    # Given an otherwise valid row with no boxes or callout ROI.
+    selection = select_final_rows(_valid_candidates())[0]
+    empty_frame = replace(
+        selection.frame, ground_truth=(), source_only=(), codemerge=(), refuse_tta=(),
+    )
+    empty_selection = replace(selection, frame=empty_frame, callouts=())
+    row = FinalRenderRow(empty_selection, np.zeros((0, 5), dtype=float))
+
+    # When the horizontal crop falls back to the existing selection crop.
+    crop = final_rendering.horizontal_crop(row)
+
+    # Then it contains the legacy crop and expands, rather than shrinking, to the target ratio.
+    assert crop[0] <= empty_selection.crop[0]
+    assert crop[1] <= empty_selection.crop[1]
+    assert crop[2] >= empty_selection.crop[2]
+    assert crop[3] >= empty_selection.crop[3]
+    assert (crop[3] - crop[1]) / (crop[2] - crop[0]) == pytest.approx(1.8)
+
+
+def test_horizontal_plate_has_exact_canvas_shared_crops_titles_and_callout_behavior():
+    # Given the same fixed three rows used by the legacy renderer.
+    rows = _render_rows()
+    selections = tuple(row.selection for row in rows)
+
+    # When clean and callout horizontal plates are rendered.
+    clean = final_rendering.render_horizontal_plate(rows, show_callouts=False)
+    callout = final_rendering.render_horizontal_plate(rows, show_callouts=True)
+
+    # Then both are compact 3x4 publication plates with one crop per row and top-only titles.
+    assert tuple(clean.get_size_inches()) == pytest.approx((7.2, 3.6))
+    assert len(clean.axes) == len(callout.axes) == 12
+    assert [axis.get_title() for axis in clean.axes] == [
+        'GT', 'Source-only', 'CodeMerge', 'ReFuse-TTA',
+    ] + [''] * 8
+    clean.canvas.draw()
+    assert all(axis.get_window_extent().width / axis.get_window_extent().height
+               == pytest.approx(1.8, rel=0.01) for axis in clean.axes)
+    for row_index, row in enumerate(rows):
+        crop = final_rendering.horizontal_crop(row)
+        axes = clean.axes[row_index * 4:(row_index + 1) * 4]
+        callout_axes = callout.axes[row_index * 4:(row_index + 1) * 4]
+        assert [axis.get_xlim() for axis in axes] == [(crop[1], crop[3])] * 4
+        assert [axis.get_ylim() for axis in axes] == [(crop[0], crop[2])] * 4
+        assert [axis.get_xlim() for axis in callout_axes] == [(crop[1], crop[3])] * 4
+        assert [axis.get_ylim() for axis in callout_axes] == [(crop[0], crop[2])] * 4
+    assert sum(len(axis.patches) for axis in clean.axes) == 0
+    assert sum(len(axis.patches) for axis in callout.axes) == 12
+    assert all(row.selection is selection for row, selection in zip(rows, selections))
+    plt.close(clean)
+    plt.close(callout)
+
+
+def test_summary_records_computed_horizontal_crop_for_each_row(tmp_path: Path):
+    # Given the fixed final rows.
+    rows = _render_rows()
+
+    # When the reproducibility summary is written.
+    final_artifacts._write_summary(rows, tmp_path, supplied_points=False)
+    summary = (tmp_path / final_artifacts.FIGURE5_FILES[-1]).read_text(encoding='utf-8')
+
+    # Then every row discloses its computed horizontal crop coordinates.
+    for row in rows:
+        expected = tuple(round(value, 3) for value in final_rendering.horizontal_crop(row))
+        assert 'horizontal_crop=%s' % (expected,) in summary
+
+
 def test_final_artifact_names_and_manifest_are_exact_and_honest(tmp_path: Path):
     # Given the fixed three-frame output contract.
     names = artifact_names(FINAL_SAMPLE_TOKENS)
@@ -163,6 +278,11 @@ def test_final_artifact_names_and_manifest_are_exact_and_honest(tmp_path: Path):
         'figure5_row1.png', 'figure5_row2.png', 'figure5_row3.png',
         'figure5_refine_summary.md',
     )
+    assert final_artifacts.HORIZONTAL_FIGURE5_FILES == (
+        'figure5_horizontal_clean.png', 'figure5_horizontal_callout.png',
+        'figure5_horizontal_clean.pdf', 'figure5_horizontal_callout.pdf',
+    )
+    assert all(name in names for name in final_artifacts.HORIZONTAL_FIGURE5_FILES)
     assert manifest_path.name == 'figure6_status_manifest.json'
     assert payload['point_provenance']['exact_dataloader_replay'] is False
     for token in FINAL_SAMPLE_TOKENS:
