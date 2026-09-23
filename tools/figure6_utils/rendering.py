@@ -8,17 +8,18 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 import numpy as np
 
 from pcdet.utils.figure6_schema import StageState
 
-from .contracts import Crop
+from .contracts import Callout, Crop
 from .loading import StageEvidence, TokenEvidence
 from .render_primitives import (
-    RELIABILITY_CMAP, RenderDataError, draw_callouts, draw_context, draw_density, draw_final,
-    draw_reliability, draw_rgplm, draw_sgdfa, draw_status, style_axis,
+    RELIABILITY_BOUNDARIES, RELIABILITY_CMAP, RELIABILITY_NORM, ReliabilityDisplay,
+    RenderDataError, draw_callouts, draw_context, draw_density, draw_final, draw_reliability,
+    draw_rgplm, draw_sgdfa, draw_status, style_axis,
 )
 from .spatial import crop_bev_map
 
@@ -50,31 +51,47 @@ def _points(row: TokenEvidence) -> Optional[np.ndarray]:
     return row.stages[0].arrays.get('points')
 
 
-def pooled_sgdfa_limit(rows: Sequence[TokenEvidence]) -> float:
-    values = []
-    for row in rows:
-        stage = row.stages[3]
-        delta = stage.arrays.get('delta')
-        calibrated = None if delta is None else crop_bev_map(delta, stage.spatial_extent, row.crop)
-        if calibrated is not None:
-            finite = calibrated[0][np.isfinite(calibrated[0])]
-            if finite.size:
-                values.append(np.abs(finite))
-    if not values:
+def row_sgdfa_limit(row: TokenEvidence) -> float:
+    stage = row.stages[3]
+    delta = stage.arrays.get('delta')
+    calibrated = None if delta is None else crop_bev_map(delta, stage.spatial_extent, row.crop)
+    if calibrated is None:
         return float(np.finfo(np.float32).eps)
-    return max(float(np.percentile(np.concatenate(values), 98.0)),
+    finite = calibrated[0][np.isfinite(calibrated[0])]
+    if not finite.size:
+        return float(np.finfo(np.float32).eps)
+    return max(float(np.percentile(np.abs(finite), 98.0)),
                float(np.finfo(np.float32).eps))
+
+
+def _display_callouts(row: TokenEvidence) -> Tuple[Callout, ...]:
+    if not row.callouts:
+        return ()
+    callout = row.callouts[0]
+    x_min, y_min, x_max, y_max = callout.roi
+    x_margin = (x_max - x_min) * 0.1
+    y_margin = (y_max - y_min) * 0.1
+    crop_x_min, crop_y_min, crop_x_max, crop_y_max = row.crop
+    roi = (
+        max(crop_x_min, x_min - x_margin), max(crop_y_min, y_min - y_margin),
+        min(crop_x_max, x_max + x_margin), min(crop_y_max, y_max + y_margin),
+    )
+    return (Callout(roi, callout.kind, callout.class_name, callout.distance_m),)
 
 
 def draw_stage(axis: Axes, row: TokenEvidence, stage: StageEvidence,
                title: bool, sgdfa_limit: float, annotate_reliability: bool = True) -> None:
-    displayed_callouts = row.callouts[:2]
+    displayed_callouts = _display_callouts(row)
     if stage.runtime_state is not StageState.COMPLETE:
         draw_status(axis, stage, row.crop)
     if stage.runtime_state is StageState.COMPLETE and stage.slug == 'density':
         draw_density(axis, stage, row.crop, DENSITY_CMAP)
     if stage.runtime_state is StageState.COMPLETE and stage.slug == 'reliability':
-        draw_reliability(axis, stage, displayed_callouts if annotate_reliability else ())
+        draw_reliability(
+            axis, stage, ReliabilityDisplay(
+                displayed_callouts if annotate_reliability else (), row.crop,
+            ),
+        )
     if stage.runtime_state is StageState.COMPLETE and stage.slug == 'rgplm':
         draw_rgplm(axis, stage)
     if stage.runtime_state is StageState.COMPLETE and stage.slug == 'sgdfa':
@@ -90,25 +107,26 @@ def draw_stage(axis: Axes, row: TokenEvidence, stage: StageEvidence,
 def _add_reliability_key(figure: Figure, reliability_axis: Axes) -> None:
     position = reliability_axis.get_position()
     color_axis = figure.add_axes((
-        position.x0 + position.width * 0.25, 0.012,
+        position.x0 + position.width * 0.25, 0.02,
         position.width * 0.5, 0.012,
     ))
     colorbar = figure.colorbar(
-        ScalarMappable(norm=Normalize(0.0, 1.0), cmap=RELIABILITY_CMAP),
-        cax=color_axis, orientation='horizontal', ticks=(0.0, 1.0),
+        ScalarMappable(norm=RELIABILITY_NORM, cmap=RELIABILITY_CMAP),
+        cax=color_axis, orientation='horizontal', boundaries=RELIABILITY_BOUNDARIES,
+        ticks=(1.0 / 6.0, 0.5, 5.0 / 6.0),
     )
+    colorbar.ax.set_xticklabels(('Low', 'Mid', 'High'))
     colorbar.ax.tick_params(
         labelsize=4.5, length=1.5, pad=1.0,
         labeltop=True, labelbottom=False,
     )
 
 
-def render_plate(rows: Sequence[TokenEvidence], alternate: bool = False,
-                 sgdfa_limit: Optional[float] = None) -> Figure:
+def render_plate(rows: Sequence[TokenEvidence], alternate: bool = False) -> Figure:
     size = PLATE_SIZE if len(rows) == 2 else (PLATE_SIZE[0], 1.2 * len(rows) + 0.35)
     figure, axes = plt.subplots(len(rows), 5, figsize=size, squeeze=False)
-    limit = pooled_sgdfa_limit(rows) if sgdfa_limit is None else sgdfa_limit
     for row_index, row in enumerate(rows):
+        limit = row_sgdfa_limit(row)
         for column_index, stage in enumerate(row.stages):
             draw_stage(
                 axes[row_index, column_index], row, stage, row_index == 0, limit,
@@ -125,8 +143,9 @@ def render_plate(rows: Sequence[TokenEvidence], alternate: bool = False,
     return figure
 
 
-def render_row(row: TokenEvidence, sgdfa_limit: float) -> Figure:
+def render_row(row: TokenEvidence) -> Figure:
     figure, axes = plt.subplots(1, 5, figsize=ROW_SIZE, squeeze=False)
+    sgdfa_limit = row_sgdfa_limit(row)
     for column_index, stage in enumerate(row.stages):
         draw_stage(axes[0, column_index], row, stage, True, sgdfa_limit)
     figure.subplots_adjust(left=0.02, right=0.995, bottom=0.04, top=0.86, wspace=0.025)
@@ -141,17 +160,15 @@ def save_figure(figure: Figure, png: Path, pdf: Optional[Path] = None) -> None:
 
 
 def save_plate(rows: Sequence[TokenEvidence], png: Path, pdf: Path,
-               alternate: bool = False, sgdfa_limit: Optional[float] = None) -> None:
-    save_figure(render_plate(
-        rows, alternate=alternate, sgdfa_limit=sgdfa_limit,
-    ), png, pdf)
+               alternate: bool = False) -> None:
+    save_figure(render_plate(rows, alternate=alternate), png, pdf)
 
 
-def save_row(row: TokenEvidence, png: Path, sgdfa_limit: float) -> None:
-    save_figure(render_row(row, sgdfa_limit), png)
+def save_row(row: TokenEvidence, png: Path) -> None:
+    save_figure(render_row(row), png)
 
 
 __all__ = [
-    'RenderDataError', 'pooled_sgdfa_limit', 'render_plate', 'render_row',
+    'RenderDataError', 'row_sgdfa_limit', 'render_plate', 'render_row',
     'save_plate', 'save_row',
 ]

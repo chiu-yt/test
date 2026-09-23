@@ -1,6 +1,9 @@
+import json
 from dataclasses import replace
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import QuadMesh
+from matplotlib.colors import to_rgba
 from matplotlib.patches import Rectangle
 import numpy as np
 import pytest
@@ -11,7 +14,7 @@ from test_figure6_rendering import _manifest, _record
 from tools.figure6_utils.contracts import Callout, load_crop_manifest
 from tools.figure6_utils.export import artifact_names, export_figure6
 from tools.figure6_utils.loading import load_evidence
-from tools.figure6_utils.rendering import pooled_sgdfa_limit, render_plate, render_row
+from tools.figure6_utils.rendering import render_plate, render_row, row_sgdfa_limit
 
 
 def _rows(tmp_path):
@@ -24,31 +27,58 @@ def _rows(tmp_path):
 
 
 @pytest.mark.parametrize('alternate', [False, True])
-def test_plate_when_rendered_includes_fixed_reliability_key(tmp_path, alternate):
+def test_plate_when_rendered_includes_three_band_reliability_key(tmp_path, alternate):
     figure = render_plate(_rows(tmp_path), alternate=alternate)
+    figure.canvas.draw()
 
     color_axis = figure.axes[-1]
-    np.testing.assert_array_equal(color_axis.get_xticks(), (0.0, 1.0))
+    labels = tuple(label.get_text() for label in color_axis.get_xticklabels())
+    color_mesh = color_axis.collections[-1]
+    assert isinstance(color_mesh, QuadMesh)
+    assert labels == ('Low', 'Mid', 'High')
+    assert np.asarray(color_mesh.get_array()).size == 3
+    tight_bounds = color_axis.get_tightbbox()
+    assert tight_bounds is not None
+    key_bounds = (color_axis.get_window_extent(), tight_bounds)
+    key_bounds += tuple(label.get_window_extent() for label in color_axis.get_xticklabels())
+    assert min(bounds.y0 for bounds in key_bounds) > figure.bbox.height * 0.015
+    assert max(bounds.y1 for bounds in key_bounds) < figure.bbox.height
     assert len(figure.axes) == 11
     plt.close(figure)
 
 
-def test_plate_when_manifest_has_three_rois_displays_first_two_in_order(tmp_path):
-    row = _rows(tmp_path)[0]
-    callouts = (
-        Callout((11.0, -8.0, 12.0, -7.0), 'first', 'car', 10.0),
-        Callout((13.0, -6.0, 14.0, -5.0), 'second', 'car', 20.0),
-        Callout((15.0, -4.0, 16.0, -3.0), 'third', 'car', 30.0),
-    )
+def test_plate_when_manifest_has_three_rois_displays_only_enlarged_first_roi(tmp_path):
+    manifest = tmp_path / 'figure5_crop_manifest.json'
+    crops = _manifest(manifest)
+    payload = json.loads(manifest.read_text(encoding='utf-8'))
+    x_min, y_min, _, _ = crops[0]
+    payload['rows'][0]['callouts'] = [
+        {'roi': [x_min, y_min, x_min + 2.0, y_min + 2.0],
+         'kind': 'first', 'class_name': 'car', 'distance_m': 10.0},
+        {'roi': [x_min + 3.0, y_min + 3.0, x_min + 4.0, y_min + 4.0],
+         'kind': 'second', 'class_name': 'car', 'distance_m': 20.0},
+        {'roi': [x_min + 5.0, y_min + 5.0, x_min + 6.0, y_min + 6.0],
+         'kind': 'third', 'class_name': 'car', 'distance_m': 30.0},
+    ]
+    manifest.write_text(json.dumps(payload), encoding='utf-8')
+    capture = tmp_path / 'capture'
+    write_record(capture, _record(FIXED_TOKENS[0]))
+    row = load_evidence(capture, load_crop_manifest(manifest)).rows[0]
 
-    figure = render_plate((replace(row, callouts=callouts),))
+    figure = render_plate((row,))
 
+    expected_geometry = (y_min, x_min, 2.2, 2.2)
     for axis in figure.axes[:5]:
-        assert len(axis.patches) == 2
-        assert tuple(
-            (patch.get_x(), patch.get_y())
-            for patch in axis.patches if isinstance(patch, Rectangle)
-        ) == ((-8.0, 11.0), (-6.0, 13.0))
+        rectangles = tuple(
+            patch for patch in axis.patches if isinstance(patch, Rectangle)
+        )
+        assert len(rectangles) == 1
+        patch = rectangles[0]
+        np.testing.assert_allclose(
+            (patch.get_x(), patch.get_y(), patch.get_width(), patch.get_height()),
+            expected_geometry,
+        )
+        assert patch.get_edgecolor() == to_rgba('#CC0000', alpha=0.72)
     plt.close(figure)
 
 
@@ -72,18 +102,58 @@ def test_reliability_annotations_choose_nearest_unique_proposal_per_roi(tmp_path
         Callout((14.0, 2.0, 16.0, 4.0), 'third', 'car', 12.0),
     )
 
-    figure = render_plate((replace(row, stages=stages, callouts=callouts),))
+    rendered_row = replace(row, stages=stages, callouts=callouts)
+    figures = (render_plate((rendered_row,)), render_row(rendered_row))
 
-    annotations = figure.axes[1].texts
-    assert tuple(text.get_text() for text in annotations) == ('r=0.10', 'r=0.90')
-    assert tuple(text.get_position() for text in annotations) == ((-2.0, 12.0), (-1.0, 13.0))
+    for figure in figures:
+        figure.canvas.draw()
+        annotations = figure.axes[1].texts
+        assert tuple(text.get_text() for text in annotations) == ('r=0.10',)
+        roi = next(patch for patch in figure.axes[1].patches if isinstance(patch, Rectangle))
+        label_x, label_y = annotations[0].get_position()
+        assert roi.get_y() + roi.get_height() < label_y < row.crop[2]
+        assert row.crop[1] < label_x < row.crop[3]
+        assert annotations[0].get_verticalalignment() == 'bottom'
+        background = annotations[0].get_bbox_patch()
+        assert background is not None
+        assert background.get_facecolor() == to_rgba('#FFFFFF', alpha=0.82)
+        assert annotations[0].get_window_extent().y0 > roi.get_window_extent().y1
 
-    alternate = render_plate((replace(row, stages=stages, callouts=callouts),), alternate=True)
+    alternate = render_plate((rendered_row,), alternate=True)
     assert not alternate.axes[1].texts
-    assert len(alternate.axes[1].lines) == len(figure.axes[1].lines)
-    assert len(alternate.axes[1].patches) == len(figure.axes[1].patches) == 2
-    plt.close(figure)
+    assert len(alternate.axes[1].lines) == len(figures[0].axes[1].lines)
+    assert len(alternate.axes[1].patches) == len(figures[0].axes[1].patches) == 1
+    for figure in figures:
+        plt.close(figure)
     plt.close(alternate)
+
+
+def test_reliability_annotation_when_roi_touches_crop_top_falls_below(tmp_path):
+    row = _rows(tmp_path)[0]
+    crop_top = row.crop[2]
+    reliability = replace(row.stages[1], arrays={
+        'pred_boxes': np.array([
+            [crop_top - 0.75, -2.0, 0.5, 2.0, 1.0, 1.0, 0.0],
+        ], dtype=np.float32),
+        'pred_scores': np.array([0.8], dtype=np.float32),
+        'pred_labels': np.array([1], dtype=np.int64),
+        'spcra_reliability': np.array([0.5], dtype=np.float32),
+    })
+    stages = row.stages[:1] + (reliability,) + row.stages[2:]
+    callout = Callout((crop_top - 1.5, -4.0, crop_top, 0.0), 'edge', 'car', 10.0)
+
+    figure = render_plate((replace(row, stages=stages, callouts=(callout,)),))
+    figure.canvas.draw()
+
+    annotation = figure.axes[1].texts[0]
+    roi = next(patch for patch in figure.axes[1].patches if isinstance(patch, Rectangle))
+    label_x, label_y = annotation.get_position()
+    assert row.crop[0] < label_y < roi.get_y()
+    assert row.crop[1] < label_x < row.crop[3]
+    assert annotation.get_verticalalignment() == 'top'
+    assert annotation.get_bbox_patch() is not None
+    assert annotation.get_window_extent().y1 < roi.get_window_extent().y0
+    plt.close(figure)
 
 
 def test_row_labels_when_rendered_stay_left_of_data_panels(tmp_path):
@@ -96,17 +166,19 @@ def test_row_labels_when_rendered_stay_left_of_data_panels(tmp_path):
     plt.close(figure)
 
 
-def test_standalone_rows_use_same_pooled_sgdfa_norm_as_main_plate(tmp_path):
+def test_plate_and_standalone_rows_use_independent_sgdfa_norms(tmp_path):
     manifest = tmp_path / 'figure5_crop_manifest.json'
     _manifest(manifest)
     capture = tmp_path / 'capture'
     write_record(capture, _record(FIXED_TOKENS[0], sgdfa_scale=1.0))
     write_record(capture, _record(FIXED_TOKENS[1], sgdfa_scale=-10.0))
     rows = load_evidence(capture, load_crop_manifest(manifest)).rows[:2]
-    limit = pooled_sgdfa_limit(rows)
+    row_limits = tuple(row_sgdfa_limit(row) for row in rows)
 
-    plate = render_plate(rows, sgdfa_limit=limit)
-    row_figures = tuple(render_row(row, limit) for row in rows)
+    plate = render_plate(rows)
+    row_figures = tuple(
+        render_row(row) for row in rows
+    )
 
     plate_norms = tuple(
         (plate.axes[index].images[0].norm.vmin, plate.axes[index].images[0].norm.vmax)
@@ -117,6 +189,8 @@ def test_standalone_rows_use_same_pooled_sgdfa_norm_as_main_plate(tmp_path):
         for figure in row_figures
     )
     assert row_norms == plate_norms
+    assert tuple(norm[1] for norm in plate_norms) == row_limits
+    assert plate_norms[0] != plate_norms[1]
     plt.close(plate)
     for figure in row_figures:
         plt.close(figure)
@@ -158,7 +232,7 @@ def test_export_when_records_are_synthetic_publishes_exact_bundle(
     assert FIXED_TOKENS[2] not in summary
     assert 'pre-update' in summary
     assert 'horizontal-y / vertical-x' in summary
-    assert 'pooled two-row 98th-percentile scale: `true`' in summary
+    assert 'row-local 98th-percentile SG-DFA scale: `true`' in summary
     assert ('alternate plate included: `%s`' % str(include_alt).lower()) in summary
     assert len(crops) == 3
     with pytest.raises(FileExistsError):

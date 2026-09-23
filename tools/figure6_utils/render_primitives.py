@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Final, Optional, Tuple
 
 from matplotlib.axes import Axes
-from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.colors import BoundaryNorm, LinearSegmentedColormap, ListedColormap
 from matplotlib.patches import Rectangle
 import numpy as np
 
@@ -24,8 +24,12 @@ LABEL_SIZE: Final[float] = 5.0
 RESPONSE_CMAP: Final[LinearSegmentedColormap] = LinearSegmentedColormap.from_list(
     'figure6_response', ('#315B7D', '#F7F7F5', '#A44A3F'),
 )
-RELIABILITY_CMAP: Final[LinearSegmentedColormap] = LinearSegmentedColormap.from_list(
-    'figure6_reliability', ('#C62828', '#FDD835', '#2E7D32'),
+RELIABILITY_BOUNDARIES: Final[Tuple[float, ...]] = (0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0)
+RELIABILITY_CMAP: Final[ListedColormap] = ListedColormap(
+    ('#C62828', '#FDD835', '#2E7D32'), name='figure6_reliability',
+)
+RELIABILITY_NORM: Final[BoundaryNorm] = BoundaryNorm(
+    RELIABILITY_BOUNDARIES, RELIABILITY_CMAP.N, clip=True,
 )
 STATUS_STYLE = {
     StageState.MISSING: (MISSING_COLOR, '#9AA0A6', 'MISSING'),
@@ -40,6 +44,12 @@ class RenderDataError(ValueError):
 
     def __str__(self) -> str:
         return self.detail
+
+
+@dataclass(frozen=True)  # noqa: SLOTS_OK - package supports Python 3.8.
+class ReliabilityDisplay:
+    callouts: Tuple[Callout, ...]
+    crop: Crop
 
 
 def style_axis(axis: Axes, crop: Crop) -> None:
@@ -68,7 +78,7 @@ def draw_callouts(axis: Axes, callouts: Tuple[Callout, ...]) -> None:
         x_min, y_min, x_max, y_max = callout.roi
         axis.add_patch(Rectangle(
             (y_min, x_min), y_max - y_min, x_max - x_min,
-            fill=False, edgecolor=CALLOUT_COLOR, linewidth=0.8,
+            fill=False, edgecolor=CALLOUT_COLOR, linewidth=1.0,
             alpha=0.72, zorder=4,
         ))
 
@@ -163,7 +173,7 @@ def draw_density(axis: Axes, stage: StageEvidence, crop: Crop,
 
 
 def draw_reliability(axis: Axes, stage: StageEvidence,
-                     callouts: Tuple[Callout, ...]) -> None:
+                     display: ReliabilityDisplay) -> None:
     arrays = prediction_arrays(stage)
     reliability = stage.arrays.get('spcra_reliability')
     if arrays is None or reliability is None:
@@ -171,13 +181,13 @@ def draw_reliability(axis: Axes, stage: StageEvidence,
     values = reliability.reshape(-1)
     if len(arrays[0]) != len(values):
         raise RenderDataError('prediction and reliability arrays must have equal lengths')
-    norm = Normalize(vmin=0.0, vmax=1.0, clip=True)
     for box, value in zip(arrays[0], values):
         if np.isfinite(value):
-            rgba = RELIABILITY_CMAP(norm(float(value)))
+            clipped = float(np.clip(value, 0.0, 1.0))
+            rgba = RELIABILITY_CMAP(RELIABILITY_NORM(clipped))
             draw_box(axis, box, (rgba[0], rgba[1], rgba[2]))
     used = set()
-    for callout in callouts:
+    for callout in display.callouts:
         center_x = (callout.roi[0] + callout.roi[2]) / 2.0
         center_y = (callout.roi[1] + callout.roi[3]) / 2.0
         candidates = tuple(
@@ -193,9 +203,27 @@ def draw_reliability(axis: Axes, stage: StageEvidence,
             + (arrays[0][index, 1] - center_y) ** 2,
             index,
         ))
-        box = arrays[0][selected]
-        axis.text(box[1], box[0], 'r=%.2f' % values[selected], fontsize=LABEL_SIZE,
-                  color=TEXT_COLOR, ha='left', va='bottom', zorder=5)
+        crop_x_min, crop_y_min, crop_x_max, crop_y_max = display.crop
+        vertical_margin = (crop_x_max - crop_x_min) * 0.02
+        horizontal_margin = (crop_y_max - crop_y_min) * 0.02
+        label_x = min(max(callout.roi[1], crop_y_min + horizontal_margin),
+                      crop_y_max - horizontal_margin)
+        above_space = crop_x_max - callout.roi[2]
+        if above_space >= vertical_margin * 2.0:
+            label_y = callout.roi[2] + vertical_margin
+            vertical_alignment = 'bottom'
+        else:
+            below_space = callout.roi[0] - crop_x_min
+            label_y = callout.roi[0] - min(vertical_margin, below_space * 0.5)
+            vertical_alignment = 'top'
+        axis.text(
+            label_x, label_y, 'r=%.2f' % values[selected], fontsize=LABEL_SIZE,
+            color=TEXT_COLOR, ha='left', va=vertical_alignment, clip_on=True, zorder=5,
+            bbox={
+                'boxstyle': 'round,pad=0.15', 'facecolor': '#FFFFFF',
+                'edgecolor': 'none', 'alpha': 0.82,
+            },
+        )
         used.add(selected)
 
 
@@ -208,7 +236,7 @@ def draw_rgplm(axis: Axes, stage: StageEvidence) -> None:
     valid = np.isfinite(labels) & (labels > 0) & (labels <= len(CLASS_COLORS))
     valid &= np.equal(labels, np.floor(labels))
     for box, label in zip(pseudo[valid, :7], labels[valid].astype(np.int64)):
-        draw_box(axis, box, class_color(int(label)))
+        draw_box(axis, box, class_color(int(label)), linewidth=1.6)
 
 
 def draw_sgdfa(axis: Axes, stage: StageEvidence, crop: Crop, limit: float) -> None:

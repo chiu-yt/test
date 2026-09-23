@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from .contracts import load_crop_manifest
 from .loading import EvidenceBundle, TokenEvidence, load_evidence
-from .rendering import pooled_sgdfa_limit, save_plate, save_row
+from .rendering import save_plate, save_row
 
 
 MAIN_NAMES: Final[Tuple[str, ...]] = (
@@ -57,27 +57,29 @@ def _summary(bundle: EvidenceBundle, include_alt: bool) -> str:
         '- `(a) Far-range recovery`: `%s`' % rows[0].token,
         '- `(b) Small-object recovery`: `%s`' % rows[1].token,
         '', '## Visualization methods', '',
-        '1. LiDAR Density: log-density with faint captured point and Figure 5 ROI context.',
-        '2. SPCRA Reliability: fixed `[0,1]` red-yellow-green box coloring.',
-        '3. RG-PLM Retained: positive valid retained pseudo labels only.',
+        '1. LiDAR Density: log-density with faint captured point and one enlarged clipped ROI.',
+        '2. SPCRA Reliability: discrete low/mid/high red-yellow-green box coloring.',
+        '3. RG-PLM Retained: positive valid retained pseudo labels only at linewidth 1.6.',
         '4. SG-DFA Response: signed channel-mean delta with nearest interpolation.',
         '5. Final Detection: captured pre-update arrays with the Figure 5 class palette.',
         '', '## Refinement contract', '',
         '- exact Figure 5 horizontal crops: `true`',
         '- horizontal-y / vertical-x orientation: `true`',
         '- identical crop across each row: `true`',
-        '- fixed reliability scale `[0,1]`: `true`',
+        '- discrete reliability thresholds `[0,1/3,2/3,1]`: `true`',
         '- constant reliability opacity: `true`',
         '- class and score labels removed: `true`',
-        '- at most two ROI-based reliability annotations per row: `true`',
+        '- one enlarged clipped canonical ROI per row: `true`',
+        '- at most one ROI-based reliability annotation per row: `true`',
         '- array length mismatches rejected: `true`',
         '- positive valid RG-PLM labels only: `true`',
         '- effective pseudo class column 7: `true`',
         '- injection pseudo class column 9: `true`',
+        '- RG-PLM retained linewidth `1.6`: `true`',
         '- signed SG-DFA channel mean: `true`',
         '- nearest SG-DFA interpolation: `true`',
-        '- pooled two-row 98th-percentile scale: `true`',
-        '- faint captured context and Figure 5 ROI overlays: `true`',
+        '- row-local 98th-percentile SG-DFA scale: `true`',
+        '- faint captured context and one enlarged clipped Figure 5 ROI overlay: `true`',
         '- pre-update final detection: `true`',
         '- 7.2-inch white plate: `true`',
         '- 600 DPI PNG and vector PDF text/boxes: `true`',
@@ -102,19 +104,12 @@ def _summary(bundle: EvidenceBundle, include_alt: bool) -> str:
 
 def _write_bundle(directory: Path, bundle: EvidenceBundle, include_alt: bool) -> None:
     rows = bundle.rows[:2]
-    limit = pooled_sgdfa_limit(rows)
-    save_plate(
-        rows, directory / MAIN_NAMES[0], directory / MAIN_NAMES[1],
-        sgdfa_limit=limit,
-    )
-    save_row(rows[0], directory / MAIN_NAMES[2], limit)
-    save_row(rows[1], directory / MAIN_NAMES[3], limit)
+    save_plate(rows, directory / MAIN_NAMES[0], directory / MAIN_NAMES[1])
+    save_row(rows[0], directory / MAIN_NAMES[2])
+    save_row(rows[1], directory / MAIN_NAMES[3])
     (directory / MAIN_NAMES[4]).write_text(_summary(bundle, include_alt), encoding='utf-8')
     if include_alt:
-        save_plate(
-            rows, directory / ALT_NAMES[0], directory / ALT_NAMES[1],
-            alternate=True, sgdfa_limit=limit,
-        )
+        save_plate(rows, directory / ALT_NAMES[0], directory / ALT_NAMES[1], alternate=True)
 
 
 def _publish(staging: Path, output: Path, overwrite: bool) -> None:

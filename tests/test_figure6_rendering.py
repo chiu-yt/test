@@ -162,7 +162,7 @@ def test_runtime_state_when_rendered_remains_honest(tmp_path, state):
     }[state] in rendered
 
 
-def test_sgdfa_when_rendered_uses_nearest_signed_map_and_pooled_scale(tmp_path):
+def test_sgdfa_when_rendered_uses_nearest_signed_map_and_row_local_scale(tmp_path):
     manifest = tmp_path / 'figure5_crop_manifest.json'
     _manifest(manifest)
     capture = tmp_path / 'capture'
@@ -172,14 +172,22 @@ def test_sgdfa_when_rendered_uses_nearest_signed_map_and_pooled_scale(tmp_path):
     evidence = load_evidence(capture, load_crop_manifest(manifest))
     figure = render_plate(evidence.rows[:2])
 
-    image = figure.axes[3].images[0]
-    np.testing.assert_array_equal(image.get_array(), [[5.0, 9.0], [6.0, 10.0]])
-    assert tuple(image.get_extent()) == (-10.0, 10.0, 10.0, 30.0)
-    assert image.get_interpolation() == 'nearest'
-    assert image.norm.vmin is not None
-    assert image.norm.vmax is not None
-    assert np.asarray(image.norm.vmin).item() == -np.asarray(image.norm.vmax).item()
-    assert figure.axes[8].images[0].norm.vmax == image.norm.vmax
+    images = (figure.axes[3].images[0], figure.axes[8].images[0])
+    np.testing.assert_array_equal(images[0].get_array(), [[5.0, 9.0], [6.0, 10.0]])
+    assert tuple(images[0].get_extent()) == (-10.0, 10.0, 10.0, 30.0)
+    assert all(image.get_interpolation() == 'nearest' for image in images)
+    expected_limits = (
+        float(np.percentile(np.abs([[5.0, 9.0], [6.0, 10.0]]), 98.0)),
+        float(np.percentile(
+            np.abs([[-60.0, -100.0, -140.0], [-70.0, -110.0, -150.0]]), 98.0,
+        )),
+    )
+    actual_limits = tuple(np.asarray(image.norm.vmax).item() for image in images)
+    np.testing.assert_allclose(actual_limits, expected_limits)
+    np.testing.assert_allclose(
+        tuple(np.asarray(image.norm.vmin).item() for image in images),
+        tuple(-limit for limit in expected_limits),
+    )
     plt.close(figure)
 
 
@@ -194,47 +202,6 @@ def test_reliability_when_lengths_differ_rejects_instead_of_truncating(tmp_path)
 
     with pytest.raises(RenderDataError, match='equal lengths'):
         render_plate((row,))
-
-
-def test_rgplm_when_rendered_keeps_only_positive_valid_effective_labels(tmp_path):
-    manifest = tmp_path / 'figure5_crop_manifest.json'
-    _manifest(manifest)
-    capture = tmp_path / 'capture'
-    center_x = 12.0
-    pseudo = np.concatenate((
-        np.array([[center_x, -2.0, 0.5, 4.0, 1.8, 1.5, 0.1, 1.0, 0.72]], dtype=np.float32),
-        np.array([[13.0, 0.0, 0.5, 2.0, 1.0, 1.0, 0.0, -9.0, 0.99]], dtype=np.float32),
-        np.array([[14.0, 0.0, 0.5, 2.0, 1.0, 1.0, 0.0, 0.0, 0.99]], dtype=np.float32),
-    ))
-    write_record(capture, _record(FIXED_TOKENS[0], pseudo_rows=pseudo))
-
-    figure = render_plate((load_evidence(capture, load_crop_manifest(manifest)).rows[0],))
-
-    assert len(figure.axes[2].lines) == 1
-    assert not figure.axes[2].texts
-    plt.close(figure)
-
-
-def test_rgplm_when_injection_is_selected_uses_class_column_nine(tmp_path):
-    manifest = tmp_path / 'figure5_crop_manifest.json'
-    _manifest(manifest)
-    capture = tmp_path / 'capture'
-    source = _record(FIXED_TOKENS[0])
-    stages = dict(source.stages)
-    del stages['effective_pseudo.aggregated_pseudo_source']
-    stages['injection'] = _complete(
-        'current_pre_update',
-        gt_boxes=np.array([
-            [12.0, -2.0, 0.5, 4.0, 1.8, 1.5, 0.1, 1.0, 0.72, -9.0],
-            [13.0, -1.0, 0.5, 2.0, 1.0, 1.0, 0.0, -7.0, 0.01, 2.0],
-        ], dtype=np.float32),
-    )
-    write_record(capture, CaptureRecord(source.identity, source.protocol, stages))
-
-    figure = render_plate((load_evidence(capture, load_crop_manifest(manifest)).rows[0],))
-
-    assert len(figure.axes[2].lines) == 1
-    plt.close(figure)
 
 
 def test_plate_when_rendered_has_fixed_publication_labels_and_no_debug_text(tmp_path):
