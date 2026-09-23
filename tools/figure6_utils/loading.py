@@ -11,7 +11,7 @@ import numpy as np
 from pcdet.utils.figure6_artifacts import scan_records, select_occurrences
 from pcdet.utils.figure6_schema import ArtifactError, CaptureRecord, StageCapture, StageState
 
-from .contracts import Crop, CropRow
+from .contracts import Callout, Crop, CropRow
 
 
 COLUMN_TITLES = (
@@ -40,6 +40,7 @@ class TokenEvidence:
     row_number: int
     purpose: str
     crop: Crop
+    callouts: Tuple[Callout, ...]
     occurrence_path: Optional[Path]
     selection_key: Optional[Tuple[int, int, int, int, str]]
     alternative_count: int
@@ -146,13 +147,13 @@ def load_evidence(capture_dir: Path, crops: Tuple[CropRow, ...]) -> EvidenceBund
             stages = tuple(_missing(title, slug, 'no valid occurrence selected')
                            for title, slug in zip(COLUMN_TITLES, COLUMN_SLUGS))
             rows.append(TokenEvidence(
-                crop.token, crop.row_number, crop.purpose, crop.crop, None, None,
+                crop.token, crop.row_number, crop.purpose, crop.crop, crop.callouts, None, None,
                 0, {}, stages,
             ))
             continue
         located = selection.selected
         rows.append(TokenEvidence(
-            crop.token, crop.row_number, crop.purpose, crop.crop, located.path,
+            crop.token, crop.row_number, crop.purpose, crop.crop, crop.callouts, located.path,
             located.record.identity.selection_key, len(selection.alternatives),
             located.record.protocol, _resolve(located.record),
         ))

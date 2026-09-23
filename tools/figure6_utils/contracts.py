@@ -13,11 +13,20 @@ Crop = Tuple[float, float, float, float]
 
 
 @dataclass(frozen=True)  # noqa: SLOTS_OK - package supports Python 3.8.
+class Callout:
+    roi: Crop
+    kind: str
+    class_name: str
+    distance_m: float
+
+
+@dataclass(frozen=True)  # noqa: SLOTS_OK - package supports Python 3.8.
 class CropRow:
     token: str
     row_number: int
     purpose: str
     crop: Crop
+    callouts: Tuple[Callout, ...]
 
 
 @dataclass(frozen=True)  # noqa: SLOTS_OK - package supports Python 3.8.
@@ -28,14 +37,14 @@ class CropManifestError(ValueError):
         return self.detail
 
 
-def _parse_crop(values: Sequence[float], token: str) -> Crop:
+def _parse_crop(values: Sequence[float], token: str, field: str = 'horizontal_crop') -> Crop:
     if not isinstance(values, (list, tuple)) or len(values) != 4:
-        raise CropManifestError('horizontal_crop for %s must contain four values' % token)
+        raise CropManifestError('%s for %s must contain four values' % (field, token))
     crop = tuple(float(value) for value in values)
     if not all(math.isfinite(value) for value in crop):
-        raise CropManifestError('horizontal_crop for %s must be finite' % token)
+        raise CropManifestError('%s for %s must be finite' % (field, token))
     if crop[0] >= crop[2] or crop[1] >= crop[3]:
-        raise CropManifestError('horizontal_crop for %s must be nondegenerate' % token)
+        raise CropManifestError('%s for %s must be nondegenerate' % (field, token))
     return crop[0], crop[1], crop[2], crop[3]
 
 
@@ -53,11 +62,12 @@ def load_crop_manifest(path: Path) -> Tuple[CropRow, ...]:
         raise CropManifestError(
             'crop manifest tokens must equal canonical FIXED_TOKENS in canonical order'
         )
-    expected = ('lidar', 'm', 'y', 'x', ['x_min', 'y_min', 'x_max', 'y_max'])
+    coordinate_order = ['x_min', 'y_min', 'x_max', 'y_max']
+    expected = ('lidar', 'm', 'y', 'x', coordinate_order, coordinate_order)
     actual = (
         conventions.get('canonical_frame'), conventions.get('units'),
         conventions.get('horizontal_axis'), conventions.get('vertical_axis'),
-        conventions.get('crop_tuple_order'),
+        conventions.get('crop_tuple_order'), conventions.get('roi_tuple_order'),
     )
     if actual != expected:
         raise CropManifestError('crop manifest coordinate conventions are incompatible')
@@ -69,7 +79,21 @@ def load_crop_manifest(path: Path) -> Tuple[CropRow, ...]:
         if not isinstance(purpose, str) or not purpose:
             raise CropManifestError('crop manifest purposes must be nonempty text')
         token = row['sample_token']
+        callouts = []
+        for callout in row.get('callouts', ()):
+            kind = callout.get('kind')
+            class_name = callout.get('class_name')
+            distance_m = float(callout.get('distance_m'))
+            if not isinstance(kind, str) or not kind or not isinstance(class_name, str) or not class_name:
+                raise CropManifestError('callout metadata for %s must be nonempty text' % token)
+            if not math.isfinite(distance_m):
+                raise CropManifestError('callout distance for %s must be finite' % token)
+            callouts.append(Callout(
+                _parse_crop(callout.get('roi'), token, 'callout roi'),
+                kind, class_name, distance_m,
+            ))
         parsed.append(CropRow(
             token, expected_number, purpose, _parse_crop(row.get('horizontal_crop'), token),
+            tuple(callouts),
         ))
     return tuple(parsed)

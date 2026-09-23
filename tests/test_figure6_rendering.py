@@ -10,9 +10,8 @@ from pcdet.utils.figure6_schema import (
     CaptureRecord, FIXED_TOKENS, Occurrence, StageCapture, StageState, StageStatus,
 )
 from tools.figure6_utils.contracts import load_crop_manifest
-from tools.figure6_utils.export import artifact_names, export_figure6
 from tools.figure6_utils.loading import load_evidence
-from tools.figure6_utils.rendering import render_plate
+from tools.figure6_utils.rendering import RenderDataError, render_plate
 
 
 def _complete(owner, **arrays):
@@ -25,7 +24,8 @@ def _empty(owner, name, shape):
     })
 
 
-def _record(token, iteration=0, reliability_state=StageState.COMPLETE):
+def _record(token, iteration=0, reliability_state=StageState.COMPLETE,
+            reliability_values=None, pseudo_rows=None, sgdfa_scale=1.0):
     center_x = 12.0 + 10.0 * FIXED_TOKENS.index(token)
     boxes = np.array([[center_x, -2.0, 0.5, 4.0, 1.8, 1.5, 0.1]], dtype=np.float32)
     prediction = {
@@ -36,7 +36,10 @@ def _record(token, iteration=0, reliability_state=StageState.COMPLETE):
     reliability = {
         StageState.COMPLETE: _complete(
             'aggregated_pseudo_source', **prediction,
-            spcra_reliability=np.array([0.6], dtype=np.float32),
+            spcra_reliability=(
+                np.array([0.6], dtype=np.float32)
+                if reliability_values is None else reliability_values
+            ),
         ),
         StageState.OBSERVED_EMPTY: _empty(
             'aggregated_pseudo_source', 'pred_boxes', (0, 7),
@@ -48,7 +51,10 @@ def _record(token, iteration=0, reliability_state=StageState.COMPLETE):
             StageStatus(StageState.MISSING, 'aggregated_pseudo_source', 'not observed'), {},
         ),
     }[reliability_state]
-    pseudo = np.array([[center_x, -2.0, 0.5, 4.0, 1.8, 1.5, 0.1, 1.0, 0.72]], dtype=np.float32)
+    pseudo = (
+        np.array([[center_x, -2.0, 0.5, 4.0, 1.8, 1.5, 0.1, 1.0, 0.72]], dtype=np.float32)
+        if pseudo_rows is None else pseudo_rows
+    )
     identity = Occurrence(token, 'frame-' + token[:4], 0, iteration, iteration, 0, 1, 0, 1)
     return CaptureRecord(identity, {
         'method': 'mos', 'final_pseudo_source': 'aggregated_pseudo_source',
@@ -63,7 +69,8 @@ def _record(token, iteration=0, reliability_state=StageState.COMPLETE):
             'aggregated_pseudo_source', gt_boxes=pseudo,
         ),
         'sg_dfa': _complete(
-            'current_pre_update', delta=np.arange(16, dtype=np.float32).reshape(1, 4, 4),
+            'current_pre_update',
+            delta=np.arange(16, dtype=np.float32).reshape(1, 4, 4) * sgdfa_scale,
         ),
         'final_detection': _complete('current_pre_update', **prediction),
     })
@@ -86,7 +93,10 @@ def _manifest(path):
         'layouts': {'square': 'figure5_final', 'horizontal': 'figure5_horizontal'},
         'rows': [
             {'row_number': index + 1, 'sample_token': token, 'purpose': 'row-%d' % (index + 1),
-             'square_crop': list(crop), 'horizontal_crop': list(crop), 'callouts': []}
+             'square_crop': list(crop), 'horizontal_crop': list(crop), 'callouts': [
+                 {'roi': [crop[0] + 1.0, crop[1] + 1.0, crop[0] + 3.0, crop[1] + 3.0],
+                  'kind': 'recovery', 'class_name': 'car', 'distance_m': 18.5},
+             ]}
             for index, (token, crop) in enumerate(zip(FIXED_TOKENS, crops))
         ],
     }
@@ -102,6 +112,11 @@ def test_crop_manifest_when_loaded_preserves_full_precision_and_order(tmp_path):
 
     assert tuple(row.token for row in rows) == FIXED_TOKENS
     assert tuple(row.crop for row in rows) == expected
+    assert rows[0].callouts[0].roi == (
+        expected[0][0] + 1.0, expected[0][1] + 1.0,
+        expected[0][0] + 3.0, expected[0][1] + 3.0,
+    )
+    assert rows[0].callouts[0].kind == 'recovery'
 
 
 def test_occurrences_when_loaded_are_deterministic_and_disclose_source(tmp_path):
@@ -119,6 +134,7 @@ def test_occurrences_when_loaded_are_deterministic_and_disclose_source(tmp_path)
     assert row.stages[1].selected_source == 'aggregated_pseudo_source'
     assert row.stages[2].selected_source == 'aggregated_pseudo_source'
     assert tuple(item.token for item in evidence.rows) == FIXED_TOKENS
+    assert row.callouts == load_crop_manifest(manifest)[0].callouts
 
 
 @pytest.mark.parametrize('state', [
@@ -146,44 +162,101 @@ def test_runtime_state_when_rendered_remains_honest(tmp_path, state):
     }[state] in rendered
 
 
-def test_sgdfa_when_rendered_uses_calibrated_bev_crop_and_axis_order(tmp_path):
+def test_sgdfa_when_rendered_uses_nearest_signed_map_and_pooled_scale(tmp_path):
     manifest = tmp_path / 'figure5_crop_manifest.json'
     _manifest(manifest)
     capture = tmp_path / 'capture'
     write_record(capture, _record(FIXED_TOKENS[0]))
+    write_record(capture, _record(FIXED_TOKENS[1], sgdfa_scale=-10.0))
 
     evidence = load_evidence(capture, load_crop_manifest(manifest))
-    figure = render_plate((evidence.rows[0],))
+    figure = render_plate(evidence.rows[:2])
 
     image = figure.axes[3].images[0]
     np.testing.assert_array_equal(image.get_array(), [[5.0, 9.0], [6.0, 10.0]])
     assert tuple(image.get_extent()) == (-10.0, 10.0, 10.0, 30.0)
+    assert image.get_interpolation() == 'nearest'
+    assert image.norm.vmin is not None
+    assert image.norm.vmax is not None
+    assert np.asarray(image.norm.vmin).item() == -np.asarray(image.norm.vmax).item()
+    assert figure.axes[8].images[0].norm.vmax == image.norm.vmax
     plt.close(figure)
 
 
-def test_export_when_records_are_synthetic_publishes_exact_bundle(tmp_path):
+def test_reliability_when_lengths_differ_rejects_instead_of_truncating(tmp_path):
     manifest = tmp_path / 'figure5_crop_manifest.json'
-    crops = _manifest(manifest)
+    _manifest(manifest)
     capture = tmp_path / 'capture'
-    for token in FIXED_TOKENS:
+    write_record(capture, _record(
+        FIXED_TOKENS[0], reliability_values=np.array([0.2, 0.8], dtype=np.float32),
+    ))
+    row = load_evidence(capture, load_crop_manifest(manifest)).rows[0]
+
+    with pytest.raises(RenderDataError, match='equal lengths'):
+        render_plate((row,))
+
+
+def test_rgplm_when_rendered_keeps_only_positive_valid_effective_labels(tmp_path):
+    manifest = tmp_path / 'figure5_crop_manifest.json'
+    _manifest(manifest)
+    capture = tmp_path / 'capture'
+    center_x = 12.0
+    pseudo = np.concatenate((
+        np.array([[center_x, -2.0, 0.5, 4.0, 1.8, 1.5, 0.1, 1.0, 0.72]], dtype=np.float32),
+        np.array([[13.0, 0.0, 0.5, 2.0, 1.0, 1.0, 0.0, -9.0, 0.99]], dtype=np.float32),
+        np.array([[14.0, 0.0, 0.5, 2.0, 1.0, 1.0, 0.0, 0.0, 0.99]], dtype=np.float32),
+    ))
+    write_record(capture, _record(FIXED_TOKENS[0], pseudo_rows=pseudo))
+
+    figure = render_plate((load_evidence(capture, load_crop_manifest(manifest)).rows[0],))
+
+    assert len(figure.axes[2].lines) == 1
+    assert not figure.axes[2].texts
+    plt.close(figure)
+
+
+def test_rgplm_when_injection_is_selected_uses_class_column_nine(tmp_path):
+    manifest = tmp_path / 'figure5_crop_manifest.json'
+    _manifest(manifest)
+    capture = tmp_path / 'capture'
+    source = _record(FIXED_TOKENS[0])
+    stages = dict(source.stages)
+    del stages['effective_pseudo.aggregated_pseudo_source']
+    stages['injection'] = _complete(
+        'current_pre_update',
+        gt_boxes=np.array([
+            [12.0, -2.0, 0.5, 4.0, 1.8, 1.5, 0.1, 1.0, 0.72, -9.0],
+            [13.0, -1.0, 0.5, 2.0, 1.0, 1.0, 0.0, -7.0, 0.01, 2.0],
+        ], dtype=np.float32),
+    )
+    write_record(capture, CaptureRecord(source.identity, source.protocol, stages))
+
+    figure = render_plate((load_evidence(capture, load_crop_manifest(manifest)).rows[0],))
+
+    assert len(figure.axes[2].lines) == 1
+    plt.close(figure)
+
+
+def test_plate_when_rendered_has_fixed_publication_labels_and_no_debug_text(tmp_path):
+    manifest = tmp_path / 'figure5_crop_manifest.json'
+    _manifest(manifest)
+    capture = tmp_path / 'capture'
+    for token in FIXED_TOKENS[:2]:
         write_record(capture, _record(token))
-    corrupt = capture / 'rank_00000' / 'records' / 'corrupt'
-    corrupt.mkdir(parents=True)
-    (corrupt / 'metadata.json').write_text('{', encoding='utf-8')
-    output = tmp_path / 'figure6'
+    rows = load_evidence(capture, load_crop_manifest(manifest)).rows[:2]
 
-    export_figure6(capture, manifest, output, overwrite=False)
+    figure = render_plate(rows)
 
-    assert {path.name for path in output.iterdir()} == set(artifact_names(FIXED_TOKENS))
-    status = json.loads((output / 'figure6_status_manifest.json').read_text(encoding='utf-8'))
-    assert [row['token'] for row in status['rows']] == list(FIXED_TOKENS)
-    assert [row['crop'] for row in status['rows']] == [list(crop) for crop in crops]
-    assert len(status['record_issues']) == 1
-    assert status['drafts']['2row']['tokens'] == list(FIXED_TOKENS[:2])
-    assert status['drafts']['3row']['tokens'] == list(FIXED_TOKENS)
-    for name in ('figure6_draft_2row.png', 'figure6_draft_3row.png'):
-        assert (output / name).read_bytes().startswith(b'\x89PNG')
-    for name in ('figure6_draft_2row.pdf', 'figure6_draft_3row.pdf'):
-        assert (output / name).read_bytes().startswith(b'%PDF')
-    with pytest.raises(FileExistsError):
-        export_figure6(capture, manifest, output, overwrite=False)
+    assert tuple(axis.get_title() for axis in figure.axes[:5]) == (
+        'LiDAR Density', 'SPCRA Reliability', 'RG-PLM Retained',
+        'SG-DFA Response', 'Final Detection',
+    )
+    figure_text = tuple(text.get_text() for text in figure.texts)
+    assert figure_text == ('(a) Far-range recovery', '(b) Small-object recovery')
+    panel_text = ' '.join(text.get_text() for axis in figure.axes for text in axis.texts)
+    assert 'token' not in panel_text.lower()
+    assert 'rank' not in panel_text.lower()
+    assert 'car' not in panel_text.lower()
+    assert sum(text.startswith('r=') for text in panel_text.split()) <= 4
+    assert tuple(round(value, 2) for value in figure.get_size_inches()) == (7.2, 2.75)
+    plt.close(figure)

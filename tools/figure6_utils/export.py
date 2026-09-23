@@ -1,25 +1,21 @@
-"""Atomic Figure 6 bundle publication and machine-readable provenance."""
-
 from dataclasses import dataclass
-import json
 from pathlib import Path
 import shutil
 from tempfile import mkdtemp
-from typing import Dict, Final, Mapping, Sequence, Tuple
+from typing import Final, Tuple
 from uuid import uuid4
-
-from pcdet.utils.figure6_schema import FIXED_TOKENS
 
 from .contracts import load_crop_manifest
 from .loading import EvidenceBundle, TokenEvidence, load_evidence
-from .rendering import save_plate, save_stage_png
+from .rendering import pooled_sgdfa_limit, save_plate, save_row
 
 
-STATUS_NAME: Final[str] = 'figure6_status_manifest.json'
-SUMMARY_NAME: Final[str] = 'figure6_summary.md'
-DRAFT_NAMES: Final[Tuple[str, ...]] = (
-    'figure6_draft_2row.png', 'figure6_draft_2row.pdf',
-    'figure6_draft_3row.png', 'figure6_draft_3row.pdf',
+MAIN_NAMES: Final[Tuple[str, ...]] = (
+    'figure6_refined_2row.png', 'figure6_refined_2row.pdf',
+    'figure6_row_a.png', 'figure6_row_b.png', 'figure6_refine_summary.md',
+)
+ALT_NAMES: Final[Tuple[str, ...]] = (
+    'figure6_refined_2row_alt.png', 'figure6_refined_2row_alt.pdf',
 )
 
 
@@ -38,90 +34,87 @@ class ExportBundleError(RuntimeError):
         return 'staged Figure 6 bundle differs from the declared artifact contract'
 
 
-def artifact_names(tokens: Sequence[str]) -> Tuple[str, ...]:
-    panels = tuple(
-        '%s_%s.png' % (slug, token)
-        for token in tokens
-        for slug in ('density', 'reliability', 'rgplm', 'sgdfa', 'finaldet')
-    )
-    return panels + DRAFT_NAMES + (STATUS_NAME, SUMMARY_NAME)
+def artifact_names(include_alt: bool = False) -> Tuple[str, ...]:
+    return MAIN_NAMES + (ALT_NAMES if include_alt else ())
 
 
-def _stage_payload(row: TokenEvidence) -> Tuple[Mapping[str, str], ...]:
-    return tuple({
-        'column': stage.title,
-        'artifact': '%s_%s.png' % (stage.slug, row.token),
-        'runtime_state': stage.runtime_state.value,
-        'owner': stage.owner,
-        'detail': stage.detail,
-        'selected_stage': stage.selected_stage,
-        'selected_source': stage.selected_source,
-        'array_names': sorted(stage.arrays),
-        'spatial_extent': (None if stage.spatial_extent is None else list(stage.spatial_extent)),
-    } for stage in row.stages)
+def _stage_states(row: TokenEvidence) -> str:
+    return ', '.join('%s=`%s`' % (stage.title, stage.runtime_state.value)
+                     for stage in row.stages)
 
 
-def _status(bundle: EvidenceBundle) -> Dict:
-    rows = []
-    for row in bundle.rows:
-        rows.append({
-            'token': row.token,
-            'row_number': row.row_number,
-            'purpose': row.purpose,
-            'crop': list(row.crop),
-            'occurrence_path': None if row.occurrence_path is None else str(row.occurrence_path),
-            'selection_key': None if row.selection_key is None else list(row.selection_key),
-            'alternative_count': row.alternative_count,
-            'protocol': dict(row.protocol),
-            'stages': list(_stage_payload(row)),
-        })
-    return {
-        'schema_version': 1,
-        'figure': 6,
-        'columns': [stage.title for stage in bundle.rows[0].stages],
-        'canonical_tokens': list(FIXED_TOKENS),
-        'rows': rows,
-        'record_issues': [
-            {'path': str(issue.path), 'detail': issue.detail} for issue in bundle.issues
-        ],
-        'drafts': {
-            '2row': {'tokens': list(FIXED_TOKENS[:2]),
-                     'artifacts': list(DRAFT_NAMES[:2])},
-            '3row': {'tokens': list(FIXED_TOKENS),
-                     'artifacts': list(DRAFT_NAMES[2:])},
-        },
-    }
+def _protocol(row: TokenEvidence) -> str:
+    if not row.protocol:
+        return 'unavailable'
+    return '; '.join('%s=%s' % item for item in sorted(row.protocol.items()))
 
 
-def _summary(bundle: EvidenceBundle) -> str:
+def _summary(bundle: EvidenceBundle, include_alt: bool) -> str:
+    rows = bundle.rows[:2]
     lines = [
-        '# Figure 6 export summary', '',
-        'Five aligned runtime stages are rendered over the exact Figure 5 horizontal crops.', '',
-        '| Row | Token | Runtime stage states |',
-        '|---:|---|---|',
+        '# Figure 6 refinement summary', '',
+        '## Fixed rows', '',
+        '- `(a) Far-range recovery`: `%s`' % rows[0].token,
+        '- `(b) Small-object recovery`: `%s`' % rows[1].token,
+        '', '## Visualization methods', '',
+        '1. LiDAR Density: log-density with faint captured point and Figure 5 ROI context.',
+        '2. SPCRA Reliability: fixed `[0,1]` red-yellow-green box coloring.',
+        '3. RG-PLM Retained: positive valid retained pseudo labels only.',
+        '4. SG-DFA Response: signed channel-mean delta with nearest interpolation.',
+        '5. Final Detection: captured pre-update arrays with the Figure 5 class palette.',
+        '', '## Refinement contract', '',
+        '- exact Figure 5 horizontal crops: `true`',
+        '- horizontal-y / vertical-x orientation: `true`',
+        '- identical crop across each row: `true`',
+        '- fixed reliability scale `[0,1]`: `true`',
+        '- constant reliability opacity: `true`',
+        '- class and score labels removed: `true`',
+        '- at most two ROI-based reliability annotations per row: `true`',
+        '- array length mismatches rejected: `true`',
+        '- positive valid RG-PLM labels only: `true`',
+        '- effective pseudo class column 7: `true`',
+        '- injection pseudo class column 9: `true`',
+        '- signed SG-DFA channel mean: `true`',
+        '- nearest SG-DFA interpolation: `true`',
+        '- pooled two-row 98th-percentile scale: `true`',
+        '- faint captured context and Figure 5 ROI overlays: `true`',
+        '- pre-update final detection: `true`',
+        '- 7.2-inch white plate: `true`',
+        '- 600 DPI PNG and vector PDF text/boxes: `true`',
+        '- alternate plate included: `%s`' % str(include_alt).lower(),
+        '- alternate difference: `%s`' % (
+            'compact reliability r= annotations suppressed; all other plate content retained.'
+            if include_alt else 'not exported'
+        ),
+        '', '## Runtime evidence', '',
     ]
-    for row in bundle.rows:
-        states = ', '.join('%s: `%s`' % (stage.title, stage.runtime_state.value)
-                           for stage in row.stages)
-        lines.append('| %d | `%s` | %s |' % (row.row_number, row.token, states))
-    lines.extend(['', 'Corrupt or incomplete runtime records reported: **%d**.' % len(bundle.issues), ''])
+    for row in rows:
+        lines.extend([
+            '- `%s` protocol: %s' % (row.token, _protocol(row)),
+            '- `%s` stage states: %s' % (row.token, _stage_states(row)),
+        ])
+    lines.extend([
+        '- corrupt or incomplete runtime records: `%d`' % len(bundle.issues),
+        '',
+    ])
     return '\n'.join(lines)
 
 
-def _write_bundle(directory: Path, bundle: EvidenceBundle) -> None:
-    for row in bundle.rows:
-        for stage in row.stages:
-            save_stage_png(stage, row.crop, directory / ('%s_%s.png' % (stage.slug, row.token)))
+def _write_bundle(directory: Path, bundle: EvidenceBundle, include_alt: bool) -> None:
+    rows = bundle.rows[:2]
+    limit = pooled_sgdfa_limit(rows)
     save_plate(
-        bundle.rows[:2], directory / DRAFT_NAMES[0], directory / DRAFT_NAMES[1],
+        rows, directory / MAIN_NAMES[0], directory / MAIN_NAMES[1],
+        sgdfa_limit=limit,
     )
-    save_plate(
-        bundle.rows, directory / DRAFT_NAMES[2], directory / DRAFT_NAMES[3],
-    )
-    with (directory / STATUS_NAME).open('w', encoding='utf-8') as stream:
-        json.dump(_status(bundle), stream, indent=2, sort_keys=True, allow_nan=False)
-        stream.write('\n')
-    (directory / SUMMARY_NAME).write_text(_summary(bundle), encoding='utf-8')
+    save_row(rows[0], directory / MAIN_NAMES[2], limit)
+    save_row(rows[1], directory / MAIN_NAMES[3], limit)
+    (directory / MAIN_NAMES[4]).write_text(_summary(bundle, include_alt), encoding='utf-8')
+    if include_alt:
+        save_plate(
+            rows, directory / ALT_NAMES[0], directory / ALT_NAMES[1],
+            alternate=True, sgdfa_limit=limit,
+        )
 
 
 def _publish(staging: Path, output: Path, overwrite: bool) -> None:
@@ -141,17 +134,16 @@ def _publish(staging: Path, output: Path, overwrite: bool) -> None:
 
 
 def export_figure6(capture_dir: Path, crop_manifest: Path, output_dir: Path,
-                   overwrite: bool = False) -> ExportResult:
+                   overwrite: bool = False, include_alt: bool = False) -> ExportResult:
     if output_dir.exists() and not overwrite:
         raise FileExistsError('Figure 6 output already exists: %s' % output_dir)
-    crops = load_crop_manifest(crop_manifest)
-    bundle = load_evidence(capture_dir, crops)
+    bundle = load_evidence(capture_dir, load_crop_manifest(crop_manifest))
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(mkdtemp(prefix='.%s.staging.' % output_dir.name, dir=str(output_dir.parent)))
     published = False
+    names = artifact_names(include_alt)
     try:
-        _write_bundle(staging, bundle)
-        names = artifact_names(FIXED_TOKENS)
+        _write_bundle(staging, bundle, include_alt)
         actual = tuple(sorted(path.name for path in staging.iterdir()))
         if actual != tuple(sorted(names)):
             raise ExportBundleError(tuple(sorted(names)), actual)
