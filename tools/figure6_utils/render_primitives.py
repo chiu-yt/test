@@ -15,6 +15,9 @@ from .spatial import crop_bev_map
 
 
 POINT_COLOR: Final[str] = '#707070'
+CANDIDATE_COLOR: Final[Tuple[float, float, float]] = (
+    176.0 / 255.0, 176.0 / 255.0, 176.0 / 255.0,
+)
 CALLOUT_COLOR: Final[str] = '#CC0000'
 TEXT_COLOR: Final[str] = '#263238'
 MISSING_COLOR: Final[str] = '#F1F3F4'
@@ -227,9 +230,19 @@ def draw_reliability(axis: Axes, stage: StageEvidence,
         used.add(selected)
 
 
-def draw_rgplm(axis: Axes, stage: StageEvidence) -> None:
-    pseudo = stage.arrays.get('gt_boxes')
-    class_column = 9 if stage.selected_stage == 'injection' else 7
+def draw_rgplm(axis: Axes, candidate: StageEvidence, retained: StageEvidence) -> None:
+    if candidate.runtime_state is StageState.COMPLETE:
+        boxes = candidate.arrays.get('pred_boxes')
+        if not isinstance(boxes, np.ndarray) or boxes.ndim != 2 or boxes.shape[1] < 7:
+            raise RenderDataError('SPCRA candidate pred_boxes must have shape (N, >=7)')
+        for box in boxes:
+            valid = np.isfinite(box[:7]).all() and (box[3:6] > 0).all()
+            if valid:
+                draw_box(axis, box, CANDIDATE_COLOR, linewidth=0.5)
+                axis.lines[-1].set_zorder(2)
+
+    pseudo = retained.arrays.get('gt_boxes')
+    class_column = 9 if retained.selected_stage == 'injection' else 7
     if pseudo is None or pseudo.ndim != 2 or pseudo.shape[1] <= class_column:
         raise RenderDataError('effective/injection gt_boxes do not match captured format')
     labels = pseudo[:, class_column]
@@ -254,4 +267,4 @@ def draw_final(axis: Axes, stage: StageEvidence) -> None:
     if arrays is None:
         raise RenderDataError('first-forward final_detection arrays are required')
     for box, label in zip(arrays[0], arrays[1]):
-        draw_box(axis, box, class_color(int(label)), linewidth=1.1)
+        draw_box(axis, box, class_color(int(label)), linewidth=1.4)

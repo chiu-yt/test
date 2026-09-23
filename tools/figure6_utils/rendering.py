@@ -93,7 +93,7 @@ def draw_stage(axis: Axes, row: TokenEvidence, stage: StageEvidence,
             ),
         )
     if stage.runtime_state is StageState.COMPLETE and stage.slug == 'rgplm':
-        draw_rgplm(axis, stage)
+        draw_rgplm(axis, row.stages[1], row.stages[2])
     if stage.runtime_state is StageState.COMPLETE and stage.slug == 'sgdfa':
         draw_sgdfa(axis, stage, row.crop, sgdfa_limit)
     if stage.runtime_state is StageState.COMPLETE and stage.slug == 'finaldet':

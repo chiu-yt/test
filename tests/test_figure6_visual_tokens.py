@@ -62,8 +62,11 @@ def test_rgplm_when_rendered_keeps_only_valid_effective_labels_at_published_widt
 
     figure = render_plate((load_evidence(capture, load_crop_manifest(manifest)).rows[0],))
 
-    assert len(figure.axes[2].lines) == 1
-    np.testing.assert_allclose(figure.axes[2].lines[0].get_linewidth(), 1.6)
+    retained = tuple(
+        line for line in figure.axes[2].lines if line.get_linewidth() == 1.6
+    )
+    assert len(retained) == 1
+    np.testing.assert_allclose(retained[0].get_linewidth(), 1.6)
     assert not figure.axes[2].texts
     plt.close(figure)
 
@@ -86,6 +89,14 @@ def test_rgplm_when_injection_is_selected_uses_class_column_nine(tmp_path):
 
     figure = render_plate((load_evidence(capture, load_crop_manifest(manifest)).rows[0],))
 
-    assert len(figure.axes[2].lines) == 1
-    np.testing.assert_allclose(figure.axes[2].lines[0].get_linewidth(), 1.6)
+    retained = tuple(
+        line for line in figure.axes[2].lines if line.get_linewidth() == 1.6
+    )
+    assert len(retained) == 1
+    np.testing.assert_allclose(retained[0].get_linewidth(), 1.6)
+    assert to_hex(retained[0].get_color()).upper() == '#FF6347'
+    np.testing.assert_allclose(
+        np.asarray(retained[0].get_xydata()),
+        [[-0.5, 14.0], [-1.5, 14.0], [-1.5, 12.0], [-0.5, 12.0], [-0.5, 14.0]],
+    )
     plt.close(figure)
