@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 import re
@@ -30,7 +32,11 @@ def _boolean(value: JsonValue, context: str) -> bool:
 
 def _contained(path: Path, parent: Path) -> Path:
     resolved = path.resolve(strict=True)
-    if not resolved.is_relative_to(parent) or resolved == parent:
+    try:
+        resolved.relative_to(parent)
+    except ValueError as error:
+        raise Figure7LoadError(str(path) + ' escapes its containing directory') from error
+    if resolved == parent:
         raise Figure7LoadError(str(path) + ' escapes its containing directory')
     return resolved
 

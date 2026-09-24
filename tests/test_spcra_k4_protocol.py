@@ -1,5 +1,7 @@
 """Formal full-method controls are mandatory; versionless configs stay untouched."""
 
+from __future__ import annotations
+
 import ast
 from dataclasses import dataclass
 from types import SimpleNamespace

@@ -164,9 +164,9 @@ SAR 已完成实现与静态审查，但真实 GPU sanity/full-val 尚未运行�
 
 Formal K4 SPCRA + Figure 7 已完成文档 closeout，状态为 `implementation-ready`，不是已测量结果。正式服务器工作流与 canonical registration 维护在 `bevfusion_figure7_k4_server_workflow.md` 和 `bevfusion_baseline_reproduction_registry.md`。缺失的 `bevfusion_multimodal_normal_shift_plan.md` 仅作为 plain code 记录，不创建也不链接。
 
-当前 repaired gate 的本地证据是 129 个 dependency-light tests passed，其中包含并重叠 Figure 7 coverage，不另行相加。`compileall`、44-file no-excuse audit 和 `git diff --check` 也已通过。修复后重新生成的数学一致 synthetic bundle 已通过两条独立 visual QA lanes，仍只支持静态和合成验证，不能替代服务器 runtime evidence。
+当前 repaired gate 的本地证据是 131 个 dependency-light tests passed，其中新增 Python 3.8 compatibility contract，并包含且重叠 Figure 7 coverage，不另行相加。`compileall`、47-file Python 3.8 compatibility audit 和 `git diff --check` 也已通过。修复后重新生成的数学一致 synthetic bundle 已通过两条独立 visual QA lanes，仍只支持静态和合成验证，不能替代服务器 runtime evidence。
 
-本快照仍待 Python/Torch/CUDA/nuScenes 服务器预检和真实运行。Figure 6 pytest 与 LSP 均未在本地声明成功。最初 security/goal/code reviews 在 destructive overlap、non-exhaustive failure ledger、unchecked ledger rendering 与 nonfinite rejected context edge cases 上失败；修复已附带 regressions。fresh post-fix review 的 goal、hands-on QA、code quality、standalone security 和 repository-context 五条 lanes 均为 PASS；code review 发现的 synthetic-package parent-relative import blocker 也已改为 project-absolute import，并由新增 dependency-light contract 覆盖。没有真实 K4 capture、metrics、AP、latency、memory 或 throughput 可登记，Figure 7 也没有真实渲染产物。
+服务器首次预检确认现有 `mos_mm` 是 Python 3.8.20，并暴露了 evaluated built-in generic alias、Python-3.10 dataclass slots、Python-3.9 renderer/test API 的兼容缺口；这些缺口已修复并加入 Python 3.8 contract，但真实 Python/Torch/CUDA/nuScenes 服务器重跑仍待完成。Figure 6 pytest 与 LSP 均未在本地声明成功。最初 security/goal/code reviews 在 destructive overlap、non-exhaustive failure ledger、unchecked ledger rendering 与 nonfinite rejected context edge cases 上失败；修复已附带 regressions。fresh post-fix review 的 goal、hands-on QA、code quality、standalone security 和 repository-context 五条 lanes 均为 PASS；code review 发现的 synthetic-package parent-relative import blocker 也已改为 project-absolute import，并由新增 dependency-light contract 覆盖。没有真实 K4 capture、metrics、AP、latency、memory 或 throughput 可登记，Figure 7 也没有真实渲染产物。
 
 ## 0.1 2026-05 新方向修正：从对称冲突到非对称可靠性
 

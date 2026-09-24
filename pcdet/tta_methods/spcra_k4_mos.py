@@ -1,5 +1,7 @@
 """Formal-only MOS composition; no loader, optimizer, or additional forward owner."""
 
+from __future__ import annotations
+
 import numpy as np
 from numpy.typing import NDArray
 

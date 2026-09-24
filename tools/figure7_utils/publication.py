@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import Counter
 from dataclasses import dataclass
 from os.path import abspath
@@ -21,7 +23,7 @@ OUTPUT_NAMES: Final[Tuple[str, ...]] = (
 DEFAULT_RANGE: Final[Crop] = (-54.0, -54.0, 54.0, 54.0)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class PublicationResult:
     output_dir: Path
     artifacts: Tuple[str, ...]

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -8,7 +10,7 @@ from .spcra_k4_core import K4Result, Predictions
 from .spcra_k4_seeding import ViewSamples
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class PredictionEvidence:
     boxes: NDArray[np.float64]
     labels: NDArray[np.float64]
@@ -16,14 +18,14 @@ class PredictionEvidence:
     camera_support: NDArray[np.float64] | None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class K4EvidenceInput:
     reference: Predictions
     views: tuple[Predictions, ...]
     samples: ViewSamples
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class K4Evidence:
     reference_prediction: PredictionEvidence
     view_predictions: tuple[PredictionEvidence, ...]

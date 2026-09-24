@@ -1,5 +1,7 @@
 """Standalone synchronous collector; integration supplies only the current occurrence."""
 
+from __future__ import annotations
+
 from dataclasses import asdict, replace
 import json
 from pathlib import Path

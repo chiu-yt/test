@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence, Tuple, Union
@@ -21,7 +23,7 @@ class Figure7LoadError(ValueError):
         return self.detail
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class ProvenanceInfo:
     config: str
     command: str
@@ -29,7 +31,7 @@ class ProvenanceInfo:
     fixed_seed: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class LedgerReference:
     index: int
     class_name: str
@@ -43,7 +45,7 @@ class LedgerReference:
     variable_key: Tuple[JsonValue, ...] | None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class LedgerEntry:
     record_id: str
     token: str
@@ -59,7 +61,7 @@ class LedgerEntry:
     observation: Mapping[str, JsonValue]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class SelectedRecord:
     candidate: Candidate
     directory: Path
@@ -86,7 +88,7 @@ class SelectedRecord:
         return aligned
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class CaptureBundle:
     capture_dir: Path
     provenance: ProvenanceInfo

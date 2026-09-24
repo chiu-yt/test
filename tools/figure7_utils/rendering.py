@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Sequence, Tuple
@@ -38,7 +40,7 @@ RELIABILITY_CMAP: Final[LinearSegmentedColormap] = LinearSegmentedColormap.from_
 RELIABILITY_NORM: Final[Normalize] = Normalize(0.0, 1.0, clip=True)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class RenderLayout:
     labels: Tuple[str, ...]
     size: Tuple[float, float]

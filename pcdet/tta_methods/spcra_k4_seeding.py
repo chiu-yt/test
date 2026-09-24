@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
@@ -29,7 +31,7 @@ class ViewCollisionError(RuntimeError):
         return f'{self.token}: view {self.view_index} exhausted {self.max_attempts} attempts'
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class ViewSamples:
     indices: tuple[NDArray[np.int64], ...]
     transforms: tuple[NDArray[np.float32], ...]

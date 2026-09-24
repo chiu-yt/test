@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Tuple
 
 import numpy as np
 
@@ -19,7 +19,7 @@ CLASS_NAMES: Final[tuple[str, ...]] = (
 )
 Pool = Literal['stable', 'variable']
 Status = Literal['complete', 'empty', 'ineligible', 'incomplete', 'failed']
-RankKey = tuple[int, float, float, float, str, int, int, int, int, int]
+RankKey = Tuple[int, float, float, float, str, int, int, int, int, int]
 
 
 class Figure7Error(ValueError):
@@ -31,7 +31,7 @@ class Figure7Error(ValueError):
         return self.detail
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class Provenance:
     config: str
     command: str
@@ -43,7 +43,7 @@ class Provenance:
             raise Figure7Error('explicit run provenance is required')
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class PoolLimits:
     stable: int = 10
     variable: int = 10
@@ -57,7 +57,7 @@ class PoolLimits:
         return self.stable + self.variable
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class CurrentPoints:
     """Owned CPU arrays, in the actual reference/view input coordinate frames.
 
@@ -87,7 +87,7 @@ class CurrentPoints:
         object.__setattr__(self, 'reference_transform', copies[5])
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class Observation:
     identity: Occurrence
     model_step: int
@@ -100,7 +100,7 @@ class Observation:
             raise Figure7Error('model_step must identify the nonnegative pre-update step')
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class ReferenceRow:
     index: int
     class_name: str
@@ -121,7 +121,7 @@ class ReferenceRow:
         object.__setattr__(self, 'variable_eligible', self.variable_key is not None)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class Candidate:
     record_id: str
     identity: Occurrence
@@ -134,7 +134,7 @@ class Candidate:
     rank_key: RankKey
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class LedgerRecord:
     schema_version: int
     record_id: str

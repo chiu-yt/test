@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -13,7 +15,7 @@ class K4InputError(ValueError):
         return self.detail
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class Predictions:
     """Caller-owned arrays are snapshotted and validated at evaluation, never mutated."""
 
@@ -24,7 +26,7 @@ class Predictions:
     lidar_aug_matrix: ArrayLike | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class K4Policy:
     max_center_distance: float = 1.0
     min_proposal_score: float = 0.0
@@ -44,7 +46,7 @@ class K4Policy:
             raise K4InputError('camera_rescue_enabled must be boolean')
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class K4Result:
     reliability: NDArray[np.float64]
     view_quality: NDArray[np.float64]
@@ -57,7 +59,7 @@ class K4Result:
     support: NDArray[np.float64]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class _Prepared:
     boxes: NDArray[np.float64]
     labels: NDArray[np.float64]

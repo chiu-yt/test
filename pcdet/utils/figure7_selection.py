@@ -1,5 +1,7 @@
 """Deterministic pre-update selection only; no GT or evaluation inputs."""
 
+from __future__ import annotations
+
 from dataclasses import asdict
 from hashlib import sha256
 import json

@@ -5,6 +5,8 @@ SPCRA, and raises ValueError for incompatible formal execution. AST checks bind
 the CPU composition APIs to MOS and TransFusion without importing CUDA modules.
 """
 
+from __future__ import annotations
+
 import ast
 import copy
 from types import SimpleNamespace
@@ -37,8 +39,17 @@ def calls(tree):
     return [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
 
+def dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return dotted_name(node.value) + '.' + node.attr
+    return ast.dump(node)
+
+
 def call_names(tree):
-    return [ast.unparse(node.func).split('.')[-1] for node in calls(tree)]
+    return [node.func.attr if isinstance(node.func, ast.Attribute)
+            else dotted_name(node.func) for node in calls(tree)]
 
 
 def formal_config():
@@ -149,11 +160,11 @@ class TestK4Integration(unittest.TestCase):
         """Given MOS optimize; when K4 is added; then retain training/backward/global-step order."""
         optimize = function(parsed('pcdet/tta_methods/mos.py'), 'optimize')
         ordered = sorted(calls(optimize), key=lambda node: (node.lineno, node.col_offset))
-        names = [ast.unparse(node.func) for node in ordered]
+        names = [dotted_name(node.func) for node in ordered]
         expected = ['self._run_spcra_diagnostic', 'self._inject_pseudo_labels',
                     'self.model.train', "batch_dict['optimizer'].zero_grad", 'TTA_augmentation',
                     'self.model', 'loss.mean', 'final_loss.backward', 'self.model.update_global_step']
-        positions = [names.index(name) for name in expected]
+        positions = [names.index(dotted_name(ast.parse(name, mode='eval').body)) for name in expected]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(names.count('final_loss.backward'), 1)
         self.assertFalse(any(name.endswith('.step') for name in names))
@@ -162,7 +173,9 @@ class TestK4Integration(unittest.TestCase):
         self.assertEqual(ast.dump(weighted[0].value), ast.dump(ast.parse('loss * tar_loss_weight', mode='eval').body))
         weight = [node for node in ast.walk(optimize) if isinstance(node, ast.Assign)
                   and any(isinstance(target, ast.Name) and target.id == 'tar_loss_weight' for target in node.targets)]
-        self.assertIn('cfg.SELF_TRAIN.TAR', ast.unparse(weight[0].value))
+        self.assertTrue(any(isinstance(node, ast.Attribute)
+                            and dotted_name(node) == 'cfg.SELF_TRAIN.TAR'
+                            for node in ast.walk(weight[0].value)))
 
     def test_formal_yaml_when_launching_the_paper_protocol(self):
         """Given a dedicated formal YAML; when loaded; then require all fixed controls."""

@@ -1,5 +1,7 @@
 """One staged record at a time; checksummed directory publication, numeric NPZ only."""
 
+from __future__ import annotations
+
 from dataclasses import asdict
 from hashlib import sha256
 import json

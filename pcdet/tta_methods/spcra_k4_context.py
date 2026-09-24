@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -11,13 +13,13 @@ from pcdet.utils.tta_utils import (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class DensityMapSpec:
     point_cloud_range: tuple[float, float, float, float, float, float]
     grid_size: int = 32
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class AdapterInputs:
     density_map: torch.Tensor
     proposal_boxes: torch.Tensor
@@ -58,7 +60,7 @@ def _frame_values(value, batch_size: int):
     return tuple(value)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class ReferenceProposalContext:
     """Detached reference proposals whose row identity is fixed across all views."""
 

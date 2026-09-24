@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import csv
 from contextlib import ExitStack
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -12,7 +15,7 @@ from tools.figure7_utils.publication import OUTPUT_NAMES, PublicationError, publ
 def snapshot(directory: Path) -> tuple[tuple[str, bytes | str], ...]:
     entries = []
     for path in sorted(directory.rglob('*')):
-        value = str(path.readlink()) if path.is_symlink() else (
+        value = os.readlink(str(path)) if path.is_symlink() else (
             path.read_bytes() if path.is_file() else 'directory')
         entries.append((str(path.relative_to(directory)), value))
     return tuple(entries)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -23,7 +25,7 @@ class WorldOperator(Protocol):
     def sample(self, rng: np.random.Generator) -> NDArray[np.float64]: ...
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class FlipOperator:
     axis: str
 
@@ -35,7 +37,7 @@ class FlipOperator:
         return matrix
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class RotationOperator:
     minimum: float
     maximum: float
@@ -48,7 +50,7 @@ class RotationOperator:
         return matrix
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class ScalingOperator:
     minimum: float
     maximum: float
@@ -60,7 +62,7 @@ class ScalingOperator:
         return matrix
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class TranslationOperator:
     standard_deviation: tuple[float, float, float]
 
@@ -146,7 +148,7 @@ def world_operators_from_queue(
     return tuple(operators)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
 class LegacyAugmentationSampler:
     point_count: int
     drop_rate: float
