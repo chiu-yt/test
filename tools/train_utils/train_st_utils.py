@@ -7,6 +7,7 @@ from torch.nn.utils import clip_grad_norm_
 from pcdet.models import load_data_to_gpu
 from pcdet.utils import common_utils
 from pcdet.utils.figure6_stream import Figure6StreamCapture
+from pcdet.utils.figure7_stream import Figure7StreamCapture
 from pcdet.utils.efficiency_profiler import (
     EfficiencyProfileConfigurationError,
     EfficiencyProfileRun,
@@ -40,8 +41,11 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
     """
     MM-MOS Test-Time Adaptation 训练入口
     """
+    from contextlib import nullcontext
+
     accumulated_iter = start_iter
     figure6_capture = None
+    figure7_capture = None
 
     # 1. 初始化 MM-MOS 控制器
     if tta_cfg and tta_cfg.ENABLED:
@@ -57,6 +61,10 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                 kwargs['cfg'], kwargs.get('capture_provenance', {}), (ckpt_save_dir, rank))
             worker_kwargs['figure6_collector'] = figure6_capture.collector
         mos_worker = worker_cls(model, tta_cfg, logger, dataset=train_loader.dataset, **worker_kwargs)
+        if tta_cfg.get('FIGURE7_CAPTURE', {}).get('ENABLED', False):
+            figure7_capture = Figure7StreamCapture.from_config(
+                kwargs['cfg'], kwargs.get('capture_provenance', {}), ckpt_save_dir)
+            mos_worker.figure7_capture = figure7_capture
         # 将当前 run 的 ckpt_dir 显式传给 MOS，避免 _find_ckpt_dir 误命中历史目录
         if ckpt_save_dir is not None:
             mos_worker.run_ckpt_dir = str(ckpt_save_dir)
@@ -135,85 +143,89 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                 cur_batch_size = int(batch_dict.get('batch_size', getattr(train_loader, 'batch_size', 1)))
                 samples_seen = int(it) * max(cur_batch_size, 1)
                 batch_dict['samples_seen'] = samples_seen
-                if figure6_capture is not None:
-                    figure6_capture.begin(
+                if figure7_capture is not None:
+                    figure7_capture.begin(
                         batch_dict, (cur_epoch, accumulated_iter, samples_seen, cur_batch_size))
+                with figure7_capture.transaction() if figure7_capture is not None else nullcontext():
+                    if figure6_capture is not None:
+                        figure6_capture.begin(
+                            batch_dict, (cur_epoch, accumulated_iter, samples_seen, cur_batch_size))
 
-                # 步进学习率
-                cur_scheduler.step(accumulated_iter)
-                cur_lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 0.0
+                    # 步进学习率
+                    cur_scheduler.step(accumulated_iter)
+                    cur_lr = optimizer.param_groups[0]['lr'] if optimizer is not None else 0.0
 
-                if profile_enabled:
-                    load_data_to_gpu(batch_dict)
-                profiler.begin_batch(cur_batch_size)
-                profiler.begin_segment()
-
-                if optimizer is not None:
-                    optimizer.zero_grad()
-                
-                # --- MM-MOS 核心逻辑调用 ---
-                # optimize 内部处理了：
-                # 1. 图像/点云特征提取 (BEVFusion Forward)
-                # 2. 伪标签生成与 Hungarian 匹配
-                # 3. 多模态余弦相似度计算 (Cos-Sim)
-                # 4. 损失计算与反向传播 (Loss Backward)
-                if profile_enabled:
-                    loss, tb_dict, disp_dict = mos_worker.optimize(
-                        batch_dict, data_already_on_gpu=True
-                    )
-                else:
-                    loss, tb_dict, disp_dict = mos_worker.optimize(batch_dict)
-                if figure6_capture is not None:
-                    figure6_capture.finish()
-                if optimizer is not None:
-                    clip_grad_norm_(model.parameters(), optim_cfg.GRAD_NORM_CLIP)
-                    optimizer.step()
-                profiler.end_segment()
-                # --------------------------
-
-                accumulated_iter += 1
-
-                # 与 MOS-main 参考实现对齐：按 samples_seen 保存 checkpoint_iter_*
-                should_save_iter_ckpt = False
-                if samples_seen in save_ckpt_points:
-                    should_save_iter_ckpt = True
-                if save_interval_iter > 0 and (samples_seen % save_interval_iter == 0):
-                    should_save_iter_ckpt = True
-
-                if (
-                    rank == 0
-                    and ckpt_save_dir is not None
-                    and should_save_iter_ckpt
-                ):
+                    if profile_enabled:
+                        load_data_to_gpu(batch_dict)
+                    profiler.begin_batch(cur_batch_size)
                     profiler.begin_segment()
-                    ckpt_name = ckpt_save_dir / ('checkpoint_iter_%d' % samples_seen)
-                    state = checkpoint_state(model, optimizer, cur_epoch, accumulated_iter)
-                    save_checkpoint(state, filename=ckpt_name)
+
+                    if optimizer is not None:
+                        optimizer.zero_grad()
+
+                    # --- MM-MOS 核心逻辑调用 ---
+                    # optimize 内部处理了：
+                    # 1. 图像/点云特征提取 (BEVFusion Forward)
+                    # 2. 伪标签生成与 Hungarian 匹配
+                    # 3. 多模态余弦相似度计算 (Cos-Sim)
+                    # 4. 损失计算与反向传播 (Loss Backward)
+                    if profile_enabled:
+                        loss, tb_dict, disp_dict = mos_worker.optimize(
+                            batch_dict, data_already_on_gpu=True
+                        )
+                    else:
+                        loss, tb_dict, disp_dict = mos_worker.optimize(batch_dict)
+                    if figure6_capture is not None:
+                        figure6_capture.finish()
+                    if optimizer is not None:
+                        clip_grad_norm_(model.parameters(), optim_cfg.GRAD_NORM_CLIP)
+                        optimizer.step()
                     profiler.end_segment()
-                    logger.info(f'MM-MOS: 已保存在线聚合 ckpt -> {ckpt_name}.pth')
+                    # --------------------------
 
-                profiler.end_batch()
+                    accumulated_iter += 1
 
-                # 更新进度条展示信息
-                if rank == 0:
-                    pbar.update()
-                    # 在控制台显示 loss/lr + 当前相似度融合状态
-                    log_dict = {
-                        'loss': f'{float(loss):.4f}',
-                        'lr': f'{cur_lr:.2e}'
-                    }
-                    if isinstance(disp_dict, dict):
-                        log_dict.update(disp_dict)
+                    # 与 MOS-main 参考实现对齐：按 samples_seen 保存 checkpoint_iter_*
+                    should_save_iter_ckpt = False
+                    if samples_seen in save_ckpt_points:
+                        should_save_iter_ckpt = True
+                    if save_interval_iter > 0 and (samples_seen % save_interval_iter == 0):
+                        should_save_iter_ckpt = True
 
-                    pbar.set_postfix(log_dict)
-                    tbar.set_postfix(log_dict)
+                    if (
+                        rank == 0
+                        and ckpt_save_dir is not None
+                        and should_save_iter_ckpt
+                    ):
+                        profiler.begin_segment()
+                        ckpt_name = ckpt_save_dir / ('checkpoint_iter_%d' % samples_seen)
+                        state = checkpoint_state(model, optimizer, cur_epoch, accumulated_iter)
+                        save_checkpoint(state, filename=ckpt_name)
+                        profiler.end_segment()
+                        logger.info(f'MM-MOS: 已保存在线聚合 ckpt -> {ckpt_name}.pth')
 
-                    # 记录 Tensorboard
-                    if tb_log is not None:
-                        tb_log.add_scalar('train/loss', loss, accumulated_iter)
-                        tb_log.add_scalar('train/lr', cur_lr, accumulated_iter)
-                        for key, val in tb_dict.items():
-                            tb_log.add_scalar('train/' + key, val, accumulated_iter)
+                    profiler.end_batch()
+
+                    # 更新进度条展示信息
+                    if rank == 0:
+                        pbar.update()
+                        # 在控制台显示 loss/lr + 当前相似度融合状态
+                        log_dict = {
+                            'loss': f'{float(loss):.4f}',
+                            'lr': f'{cur_lr:.2e}'
+                        }
+                        if isinstance(disp_dict, dict):
+                            log_dict.update(disp_dict)
+
+                        pbar.set_postfix(log_dict)
+                        tbar.set_postfix(log_dict)
+
+                        # 记录 Tensorboard
+                        if tb_log is not None:
+                            tb_log.add_scalar('train/loss', loss, accumulated_iter)
+                            tb_log.add_scalar('train/lr', cur_lr, accumulated_iter)
+                            for key, val in tb_dict.items():
+                                tb_log.add_scalar('train/' + key, val, accumulated_iter)
             
             if rank == 0:
                 pbar.close()
@@ -234,5 +246,7 @@ def train_model_st(model, optimizer, train_loader, model_func, lr_scheduler, opt
                 logger.info(f'MM-MOS: 已保存自适应后的模型权重 -> {ckpt_name}.pth')
 
     profiler.finalize()
+    if figure7_capture is not None:
+        figure7_capture.finalize()
     logger.info('='*20 + ' MM-MOS TTA COMPLETED ' + '='*20)
     return accumulated_iter

@@ -18,10 +18,16 @@ from pcdet.ops.iou3d_nms import iou3d_nms_utils
 from pcdet.utils import common_utils, commu_utils, memory_ensemble_utils, box_utils
 from pcdet.utils.inference_utils import forward_without_annotations
 from pcdet.utils.figure6_runtime import Figure6RuntimeCollector
+from pcdet.utils.figure7_stream import Figure7StreamCapture
 from pcdet.utils.hard_pseudo_mining import hard_pseudo_mining
 from pcdet.utils.tta_utils import TTA_augmentation, build_tta_density_map
 from pcdet.datasets.augmentor.data_augmentor import DataAugmentor
 from pcdet.tta_methods.reliability import apply_sparse_point_perturbation, compute_spcra_reliability
+from pcdet.tta_methods.spcra_k4_runtime import snapshot_reference, validate_k4_config
+from pcdet.tta_methods.spcra_k4_mos import augment_k4_student, prepare_k4_reference, run_current_k4
+from pcdet.tta_methods.spcra_k4_config import K4ConfigurationError
+from pcdet.tta_methods.spcra_k4_bevfusion import K4BEVFusionViews
+from pcdet.tta_methods.spcra_k4_training import build_k4_pseudo_info, inject_k4_pseudo_labels
 
 # Global Cache (Module Level)
 PSEUDO_LABELS = {}
@@ -79,9 +85,14 @@ def _new_rg_plm_stats(enabled):
 
 class MOS(object):
     def __init__(self, model, tta_cfg, logger, dataset=None, figure6_collector: Optional[Figure6RuntimeCollector] = None):
-        self.figure6_collector = figure6_collector
-        self.model = model
         self.tta_cfg = tta_cfg
+        if self._spcra_k4_enabled():
+            validate_k4_config(dict(cfg, TTA=tta_cfg), world_size=commu_utils.get_world_size())
+            if figure6_collector is not None or isinstance(model, (torch.nn.parallel.DistributedDataParallel, torch.nn.DataParallel)):
+                raise K4ConfigurationError('Formal K4 forbids Figure6 collectors and parallel model wrappers')
+        self.figure6_collector = figure6_collector
+        self.figure7_capture: Optional[Figure7StreamCapture] = None
+        self.model = model
         self.logger = logger
         self.dataset = dataset # 保存 dataset
         self.alpha = tta_cfg.get('ALPHA', 0.5)
@@ -105,6 +116,9 @@ class MOS(object):
                     self.logger.info("理论复现：未发现 TTA 专用增强配置，回退使用标准数据增强器")
                     self.dataset.tta_data_augmentor = getattr(self.dataset, 'data_augmentor', None)
         
+        if self._spcra_k4_enabled():
+            self.k4_views = K4BEVFusionViews(self.dataset, tta_cfg.SPCRA)
+
         # Memory Bank Settings
         self.ckpt_ram_cache = OrderedDict()
         self.max_ckpt_cache = 4
@@ -157,19 +171,23 @@ class MOS(object):
         else:
             self.total_samples_seen += b_size
 
-        self._prepare_sg_dfa_density_map(batch_dict)
+        if self._spcra_k4_enabled():
+            prepare_k4_reference(self, batch_dict)
+        else:
+            self._prepare_sg_dfa_density_map(batch_dict)
         observer = self.figure6_collector
         if observer is not None:
             observer.inputs(batch_dict)
 
         # 诊断：记录注入伪标签前的 GT 类别分布（若 batch 中存在真实标签）
-        gt_hist = self._collect_hist_from_gt_boxes(batch_dict.get('gt_boxes', None))
+        gt_hist = {} if self._spcra_k4_enabled() else self._collect_hist_from_gt_boxes(batch_dict.get('gt_boxes', None))
         
         # Lazy init
-        if self.temp_model_shell is None and self.dataset is not None:
+        if not self._spcra_k4_enabled() and self.temp_model_shell is None and self.dataset is not None:
              self._init_temp_model(self.dataset)
 
         # 2. Inference for Pseudo Labels (Current Model)
+        k4_reference = snapshot_reference(batch_dict) if self._spcra_k4_enabled() else None
         self.model.eval()
         with torch.no_grad(), (observer.first_forward(batch_dict) if observer is not None else nullcontext()):
             pred_dicts, _ = forward_without_annotations(self.model, batch_dict)
@@ -179,12 +197,15 @@ class MOS(object):
         work_pred_dicts = pred_dicts
         self.spcra_stats = _new_spcra_stats(self._spcra_enabled())
         if self._spcra_enabled():
+            if self._spcra_k4_enabled():
+                batch_dict['_spcra_k4_reference'] = k4_reference
             work_pred_dicts, self.spcra_stats = self._run_spcra_diagnostic(batch_dict, pred_dicts)
             if observer is not None:
                 observer.spcra(work_pred_dicts, 'current_pre_update')
+        del k4_reference
         
         # Save raw pseudo labels（A8: 恢复与原版 MOS 一致的 memory-ensemble 语义）
-        need_update = self._should_memory_update()
+        need_update = False if self._spcra_k4_enabled() else self._should_memory_update()
         save_pseudo_label_batch(
             batch_dict, work_pred_dicts, need_update=need_update,
             observer=observer, pass_owner='current_pre_update',
@@ -196,7 +217,7 @@ class MOS(object):
         start_ckpt = self.tta_cfg.MOS_SETTING.AGGREGATE_START_CKPT
         # 优先使用 train_st_utils 显式注入的当前 run ckpt 目录。
         # 仅在未注入时才回退到自动查找（兼容旧流程）。
-        ckpt_dir = (
+        ckpt_dir = None if self._spcra_k4_enabled() else (
             self.run_ckpt_dir
             if self.run_ckpt_dir is not None
             else self._find_ckpt_dir()
@@ -205,7 +226,8 @@ class MOS(object):
         super_model = None
         tta_method = str(self.tta_cfg.get('METHOD', 'mos')).lower()
         if (
-            tta_method in ['mos', 'codemerge']
+            not self._spcra_k4_enabled()
+            and tta_method in ['mos', 'codemerge']
             and start_ckpt <= self.total_samples_seen
             and ckpt_dir
         ):
@@ -256,7 +278,10 @@ class MOS(object):
              batch_dict['optimizer'].zero_grad()
         
         # Augmentation
-        target_batch = TTA_augmentation(self.dataset, batch_dict)
+        if self._spcra_k4_enabled():
+            target_batch = augment_k4_student(self.dataset, batch_dict, self.tta_cfg.get('TTA_STRENGTH', 'mid'))
+        else:
+            target_batch = TTA_augmentation(self.dataset, batch_dict)
         
         # Forward & Loss
         # 注意：OpenPCDet 不同 detector 的 train forward 返回格式可能不同
@@ -364,6 +389,21 @@ class MOS(object):
         spcra_cfg = self.tta_cfg.get('SPCRA', None)
         return bool(spcra_cfg is not None and spcra_cfg.get('ENABLED', False))
 
+    def _spcra_k4_enabled(self):
+        spcra_cfg = self.tta_cfg.get('SPCRA') or {}
+        return bool(spcra_cfg.get('ENABLED', False) and spcra_cfg.get('VERSION') == 'k4_v1')
+
+    def _run_spcra_k4(self, batch_dict, clean_pred_dicts):
+        enriched = run_current_k4(self, batch_dict, clean_pred_dicts)
+        reliability = np.concatenate([prediction['spcra_reliability'] for prediction in enriched])
+        stats = _new_spcra_stats(True)
+        stats.update(clean_boxes=float(len(reliability)),
+                     effective_ref_boxes=float(sum(prediction['spcra_k4_accepted'].sum() for prediction in enriched)),
+                     reliability_mean=float(reliability.mean()) if len(reliability) else 0.,
+                     reliability_raw_mean=float(reliability.mean()) if len(reliability) else 0.,
+                     reliability_min=float(reliability.min()) if len(reliability) else 0.)
+        return enriched, stats
+
     def _sg_dfa_enabled(self):
         adapter_cfg = cfg.MODEL.get('TTA_FUSION_ADAPTER', None)
         density_cfg = adapter_cfg.get('SG_DFA', None) if adapter_cfg is not None else None
@@ -391,6 +431,8 @@ class MOS(object):
         )
 
     def _run_spcra_diagnostic(self, batch_dict, clean_pred_dicts, diagnostic_model=None):
+        if self._spcra_k4_enabled():
+            return self._run_spcra_k4(batch_dict, clean_pred_dicts)
         spcra_cfg = self.tta_cfg.get('SPCRA', {})
         adapter_cfg = cfg.MODEL.get('TTA_FUSION_ADAPTER', None)
         target_class_names = list(spcra_cfg.get('TARGET_CLASSES', adapter_cfg.get('TARGET_CLASSES', []) if adapter_cfg is not None else []))
@@ -1006,6 +1048,11 @@ class MOS(object):
         这样可以避免数据增强（global_rotation）在旋转速度 vx/vy 时出现维度不匹配：
         gt_boxes[:, 7:9] 必须是 2 列。
         """
+        if self._spcra_k4_enabled():
+            inject_k4_pseudo_labels(batch_dict, [NEW_PSEUDO_LABELS[fid] for fid in batch_dict['frame_id']])
+            for key in ('gt_boxes', 'tta_pseudo_weights', 'tta_pseudo_reg_weights'):
+                batch_dict[key] = torch.as_tensor(batch_dict[key], device=batch_dict['points'].device, dtype=torch.float32)
+            return
         fids = batch_dict['frame_id']
         device = batch_dict['points'].device
 
@@ -1597,6 +1644,16 @@ def save_pseudo_label_batch(input_dict, pred_dicts, need_update=False,
     2) 若启用 MEMORY_ENSEMBLE 且 need_update=True，则与历史伪标签融合
     """
     global NEW_PSEUDO_LABELS, PSEUDO_LABELS, RG_PLM_STATS, HARD_PSEUDO_STATS
+    spcra_cfg = cfg.get('TTA', {}).get('SPCRA') or {}
+    if spcra_cfg.get('ENABLED', False) and spcra_cfg.get('VERSION') == 'k4_v1':
+        RG_PLM_STATS = _new_rg_plm_stats(False)
+        HARD_PSEUDO_STATS = {}
+        _reset_geometry_filter_stats()
+        NEW_PSEUDO_LABELS = {
+            fid: build_k4_pseudo_info(prediction, cfg.SELF_TRAIN)
+            for fid, prediction in zip(input_dict['frame_id'], pred_dicts)
+        }
+        return
     rg_cfg = cfg.SELF_TRAIN.get('RG_PLM', None)
     RG_PLM_STATS = _new_rg_plm_stats(bool(rg_cfg is not None and rg_cfg.get('ENABLED', False)))
     HARD_PSEUDO_STATS = {}

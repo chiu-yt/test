@@ -108,6 +108,10 @@ def apply_tta_freeze_strategy(model, cfg, logger):
                     continue
                 param_num = sum(p.numel() for p in cur_module.parameters())
                 if child_name in ['dense_head', 'point_head', 'roi_head']:
+                    spcra = tta_cfg.get('SPCRA') or {}
+                    if spcra.get('ENABLED', False) and spcra.get('VERSION') == 'k4_v1':
+                        _unfreeze_module(cur_module)
+                        continue
                     _freeze_module_params_keep_train(cur_module)
                 else:
                     _force_module_eval_and_freeze(cur_module)

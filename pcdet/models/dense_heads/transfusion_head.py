@@ -102,6 +102,7 @@ class TransFusionHead(nn.Module):
             )
         self.loss_cls_weight = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['cls_weight']
         self.pseudo_weight_reg = bool(self.model_cfg.LOSS_CONFIG.get('PSEUDO_WEIGHT_REG', True))
+        self.spcra_k4 = False
         self.loss_bbox = loss_utils.L1Loss()
         self.loss_bbox_weight = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS['bbox_weight']
         self.loss_heatmap = loss_utils.GaussianFocalLoss()
@@ -234,6 +235,7 @@ class TransFusionHead(nn.Module):
         return res_layer
 
     def forward(self, batch_dict):
+        self.spcra_k4 = bool(batch_dict.get('spcra_k4', False))
         feats = batch_dict['spatial_features_2d']
         res = self.predict(feats)
         if batch_dict.get('reg_tta3d_capture_queries', False):
@@ -399,6 +401,18 @@ class TransFusionHead(nn.Module):
 
         if len(neg_inds) > 0:
             label_weights[neg_inds] = 1.0
+
+        if self.spcra_k4:
+            from ...tta_methods.spcra_k4_training import K4TrainingError, positive_query_weights
+
+            if pseudo_weights is None:
+                raise K4TrainingError('Formal K4 requires aligned positive query reliability')
+            cls_weights, reg_weights = positive_query_weights(
+                assigned_gt_inds.detach().cpu().numpy(), pseudo_weights.detach().cpu().numpy(),
+                code_size=self.code_size,
+            )
+            label_weights = label_weights.new_tensor(cls_weights)
+            bbox_weights = bbox_weights.new_tensor(reg_weights)
 
         # compute dense heatmap targets
         device = labels.device

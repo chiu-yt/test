@@ -1,0 +1,123 @@
+_BASE_CONFIG_: cfgs/nuscenes_models/bevfusion_mos.yaml
+
+CLASS_NAMES: ['car', 'truck', 'construction_vehicle', 'bus', 'trailer',
+              'barrier', 'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone']
+
+DATA_CONFIG:
+    _BASE_CONFIG_: cfgs/dataset_configs/nuscenes_dataset.yaml
+    MAX_SWEEPS: 5
+    DATA_SPLIT: {train: val, test: val}
+    INFO_PATH:
+        train: [nuscenes_infos_10sweeps_val.pkl]
+        test: [nuscenes_infos_10sweeps_val.pkl]
+    BALANCED_RESAMPLING: False
+    POINT_CLOUD_RANGE: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+    CAMERA_CONFIG:
+        USE_CAMERA: True
+        IMAGE:
+            FINAL_DIM: [256, 704]
+            RESIZE_LIM_TRAIN: [0.48, 0.48]
+            RESIZE_LIM_TEST: [0.48, 0.48]
+    CORRUPTION:
+        ENABLED: True
+        APPLY_IN: ['train', 'test']
+        LIDAR_SPARSITY: {ENABLED: True, SEVERITY: 5, MODE: density_dec_global}
+        LIDAR_FOG: {ENABLED: False, SEVERITY: 1}
+        IMAGE_FOG: {ENABLED: False, SEVERITY: 1}
+        IMAGE_STYLE: {ENABLED: False, SEVERITY: 1}
+        IMAGE_GEOMETRY: {ENABLED: False, SEVERITY: 1}
+    DATA_AUGMENTOR:
+        DISABLE_AUG_LIST: ['gt_sampling', 'random_world_flip', 'random_world_rotation',
+                           'random_world_scaling', 'random_world_translation', 'imgaug']
+        AUG_CONFIG_LIST: []
+    TTA_DATA_AUGMENTOR:
+        DISABLE_AUG_LIST: []
+        AUG_CONFIG_LIST:
+            - NAME: random_world_flip
+              ALONG_AXIS_LIST: ['x', 'y']
+            - NAME: random_world_rotation
+              WORLD_ROT_ANGLE: [-0.78539816, 0.78539816]
+            - NAME: random_world_scaling
+              WORLD_SCALE_RANGE: [0.9, 1.1]
+            - NAME: random_world_translation
+              NOISE_TRANSLATE_STD: [0.5, 0.5, 0.5]
+    DATA_PROCESSOR:
+        - NAME: mask_points_and_boxes_outside_range
+          REMOVE_OUTSIDE_BOXES: True
+        - NAME: shuffle_points
+          SHUFFLE_ENABLED: {train: False, test: False}
+        - NAME: transform_points_to_voxels
+          VOXEL_SIZE: [0.075, 0.075, 0.2]
+          MAX_POINTS_PER_VOXEL: 10
+          MAX_NUMBER_OF_VOXELS: {train: 120000, test: 160000}
+        - NAME: image_calibrate
+        - NAME: image_normalize
+          mean: [0.485, 0.456, 0.406]
+          std: [0.229, 0.224, 0.225]
+
+MODEL:
+    NAME: BevFusion
+    TTA_FUSION_ADAPTER:
+        ENABLED: True
+        RESIDUAL_SCALE_INIT: 0.1
+        SG_DFA: {ENABLED: True, GRID_SIZE: 32}
+    FORWARD_ONLY_CONFLICT_ANALYSIS: {ENABLED: False}
+    FORWARD_ONLY_GEOMETRY_ANALYSIS: {ENABLED: False}
+    DEPTH_ENTROPY_ANALYSIS: {ENABLED: False}
+    DENSE_HEAD:
+        NAME: TransFusionHead
+        LOSS_CONFIG:
+            PSEUDO_WEIGHT_REG: True
+
+TTA:
+    ENABLED: True
+    METHOD: mos
+    TTA_STRENGTH: mid
+    FREEZE:
+        ENABLED: True
+        ADAPTER_ONLY: True
+    FIGURE6_CAPTURE: {ENABLED: False}
+    FIGURE7_CAPTURE:
+        ENABLED: False
+        OUTPUT_DIR: ''
+        STABLE_CAPACITY: 10
+        VARIABLE_CAPACITY: 10
+    DPO_MATCHER: {ENABLED: False}
+    MOS_SETTING:
+        AGGREGATION_ENABLED: False
+        AGGREGATE_START_CKPT: 0
+        AGGREGATE_NUM: 0
+        BANK_START_CKPT: 0
+    SPCRA:
+        ENABLED: True
+        VERSION: k4_v1
+        K: 4
+        BASE_SEED: 1024
+        DROP_RATE: 0.10
+        TARGET_CLASSES: ['car', 'truck', 'construction_vehicle', 'bus', 'trailer',
+                         'barrier', 'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone']
+        TOPK_PER_CLASS: 0
+        MIN_PROPOSAL_SCORE: 0.24
+        USE_SELF_TRAIN_SCORE_THRESH: False
+        MAX_CENTER_DISTANCE: 1.0
+        RELIABILITY_FLOOR: 0.0
+        RELIABILITY_CLAMP_MAX: 1.0
+        CAMERA_RESCUE_ENABLED: True
+        CAMERA_LOW_SCORE: 0.10
+        CAMERA_THRESH: 0.60
+        CAMERA_SUPPORT_SCALE: 4.0
+
+SELF_TRAIN:
+    SCORE_THRESH: [0.28, 0.28, 0.28, 0.20, 0.20, 0.24, 0.20, 0.18, 0.24, 0.34]
+    NEG_THRESH: [0.08, 0.08, 0.09, 0.05, 0.05, 0.06, 0.06, 0.05, 0.10, 0.14]
+    MEMORY_ENSEMBLE:
+        ENABLED: False
+        MEMORY_VOTING: {ENABLED: False}
+    HARD_PSEUDO_MINING: {ENABLED: False}
+    PS_FILTER: {ENABLED: False}
+    ADAPTIVE_CAP: {ENABLED: False}
+    DEPTH_FILTER: {ENABLED: False}
+    DEPTH_ENTROPY_FILTER: {ENABLED: False}
+    GEOMETRY_FILTER: {ENABLED: False}
+    CONFLICT_FILTER: {ENABLED: False}
+    RG_PLM: {ENABLED: False}
