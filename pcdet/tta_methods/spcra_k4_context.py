@@ -50,13 +50,13 @@ def _owned_mask(value: ArrayLike, row_count: int) -> NDArray[np.bool_]:
     return mask
 
 
-def _frame_values(value, batch_size: int):
+def _frame_values(value, batch_size: int, frame_ndim: int):
     if torch.is_tensor(value):
         value = value.detach().cpu().numpy()
     if isinstance(value, np.ndarray):
-        if batch_size == 1 and value.ndim == 2:
+        if batch_size == 1 and value.ndim == frame_ndim:
             return (value,)
-        return tuple(value[index] for index in range(batch_size))
+        return tuple(value)
     return tuple(value)
 
 
@@ -82,7 +82,7 @@ class ReferenceProposalContext:
                           for _ in range(batch_size))
             return cls(boxes, masks)
 
-        frame_boxes = _frame_values(proposal_boxes, batch_size)
+        frame_boxes = _frame_values(proposal_boxes, batch_size, frame_ndim=2)
         if len(frame_boxes) != batch_size:
             raise K4ContextError('proposal boxes must match batch size')
         boxes = tuple(_owned_boxes(value) for value in frame_boxes)
@@ -90,7 +90,7 @@ class ReferenceProposalContext:
             masks = tuple(_owned_mask(np.ones(len(value), dtype=np.bool_), len(value))
                           for value in boxes)
         else:
-            frame_masks = _frame_values(proposal_mask, batch_size)
+            frame_masks = _frame_values(proposal_mask, batch_size, frame_ndim=1)
             if len(frame_masks) != batch_size:
                 raise K4ContextError('proposal masks must match batch size')
             masks = tuple(_owned_mask(mask, len(box))
@@ -145,4 +145,5 @@ class ReferenceProposalContext:
 
 
 def compose_view_calibration(view_deltas: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
-    return view_deltas @ reference
+    composed = view_deltas.to(torch.float64) @ reference.to(torch.float64)
+    return composed.to(view_deltas.dtype)

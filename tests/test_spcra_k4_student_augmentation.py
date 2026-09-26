@@ -51,10 +51,14 @@ class TestK4StudentAugmentation(unittest.TestCase):
                 cfg.pop('MODEL')
             else:
                 cfg.MODEL = previous_model
-        delta = target['lidar_aug_matrix'][0] @ torch.linalg.inv(base[0])
-        torch.testing.assert_close(target['gt_boxes'][0, 0, 7:9], delta[:2, :2] @ boxes[0, 0, 7:9])
+        delta = target['lidar_aug_matrix'][0].double() @ torch.linalg.inv(base[0].double())
+        expected_velocity = (delta[:2, :2] @ boxes[0, 0, 7:9].double()).to(boxes.dtype)
+        torch.testing.assert_close(target['gt_boxes'][0, 0, 7:9], expected_velocity)
+        expected_center = (
+            delta[:3, :3] @ boxes[0, 0, :3].double() + delta[:3, 3]
+        ).to(boxes.dtype)
         torch.testing.assert_close(target['gt_boxes'][0, 0, :3],
-                                   delta[:3, :3] @ boxes[0, 0, :3] + delta[:3, 3])
+                                   expected_center)
         self.assertEqual(target['gt_boxes'][0, 0, 9].item(), 8.)
         torch.testing.assert_close(target['gt_boxes'][0, 1:], torch.zeros_like(boxes[0, 1:]))
         torch.testing.assert_close(target['tta_pseudo_weights'], torch.tensor([[.25, 0., 0.]], device='cuda'))

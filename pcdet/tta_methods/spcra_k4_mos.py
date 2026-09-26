@@ -58,6 +58,7 @@ def restore_student_rows(augmented: NDArray, classes: NDArray) -> NDArray:
 
 
 def augment_k4_student(dataset, batch, strength='mid'):
+    from .spcra_k4_context import compose_view_calibration
     from pcdet.utils.tta_utils import TTA_augmentation
 
     classes = batch['gt_boxes'][..., 9].detach().cpu().numpy().copy()
@@ -70,5 +71,7 @@ def augment_k4_student(dataset, batch, strength='mid'):
     # Exact r applies only to positive-query cls/reg; dense heatmap targets stay native.
     for key in ('tta_pseudo_weights', 'tta_pseudo_reg_weights'):
         target[key] = target[key] * valid.to(target[key].dtype)
-    target['lidar_aug_matrix'] = target['lidar_aug_matrix'] @ base_transform
+    target['lidar_aug_matrix'] = compose_view_calibration(
+        target['lidar_aug_matrix'], base_transform,
+    )
     return target
