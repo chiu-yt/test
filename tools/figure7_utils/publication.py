@@ -77,7 +77,7 @@ def summary_text(bundle: CaptureBundle, point_range: Crop) -> str:
         '- configured reference range: `%s`' % (point_range,), '',
         '## K4 protocol', '',
         '- selection policy: `%s`' % bundle.selection_policy,
-        '- Case A: `q >= 0.85` and `r <= 0.30`; Case B: `q >= 0.65`, `r >= 0.80`, '
+        '- Case A: `q >= 0.85` and `r <= 0.70`; Case B: `q >= 0.85`, `r >= 0.90`, '
         'and all four views matched.',
         '- Pairing prefers same class, nearest confidence, largest reliability gap, and distinct tokens.',
         '- Four captured view predictions and actual view points are inverse-aligned with the K4 '

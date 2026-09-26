@@ -45,9 +45,9 @@ def reference_rows(frame: Observation) -> tuple[ReferenceRow, ...]:
                frame.identity.global_rank, frame.identity.batch_index, index)
         stable_key = variable_key = None
         if accepted and score is not None and math.isfinite(reliability):
-            if score >= .65 and reliability >= .80 and all(value >= 0 for value in matches):
+            if score >= .85 and reliability >= .90 and all(value >= 0 for value in matches):
                 stable_key = (priority, -score, -reliability, -min(qualities), *tie)
-            if score >= .85 and reliability <= .30:
+            if score >= .85 and reliability <= .70:
                 variable_key = (priority, -(score - reliability), -score, reliability, *tie)
         rows.append(ReferenceRow(
             index, class_name, score, accepted, bool(evidence.reference_rescue_mask[index]),
@@ -87,7 +87,7 @@ def retain(candidates_: tuple[Candidate, ...], limits: PoolLimits) -> tuple[Cand
 def select_pair(retained: tuple[Candidate, ...]) -> tuple[Candidate, Candidate]:
     """Case A then Case B: same class, class priority, closest q, then largest r gap.
 
-    Thresholds guarantee a reliability gap of at least 0.50. Far-range car means
+    Thresholds guarantee a reliability gap of at least 0.20. Far-range car means
     >=30m in the reference input frame; other classes remain fallback candidates.
     """
     pairs = [(variable, stable) for variable in retained for stable in retained

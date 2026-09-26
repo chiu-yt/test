@@ -12,11 +12,11 @@ class TestFigure7Selection(unittest.TestCase):
     def test_thresholds_when_on_boundaries(self):
         """Given boundary evidence, when ranked, then retain approved thresholds only."""
         cases = (
-            (True, .65, .80, True), (True, .6499, .80, False),
-            (True, .9, .7999, False), (False, .85, .30, True),
-            (False, .8499, .30, False), (False, .9, .3001, False),
-            (True, .85, .30, True), (True, .8499, .30, False),
-            (True, .85, .3001, False),
+            (True, .85, .90, True), (True, .8499, .90, False),
+            (True, .9, .8999, False), (False, .85, .70, True),
+            (False, .8499, .70, False), (False, .9, .7001, False),
+            (True, .85, .70, True), (True, .8499, .70, False),
+            (True, .85, .7001, False),
         )
         for stable, score, reliability, eligible in cases:
             with self.subTest(stable=stable, score=score, reliability=reliability):

@@ -74,7 +74,7 @@ class Figure7Collector:
             'schema_version': SCHEMA_VERSION, 'provenance': asdict(provenance),
             'limits': asdict(limits), 'owner': 'current_pre_update',
             'completion_order': ['reference_prediction', 'reference_points', 'view_0', 'view_1', 'view_2', 'view_3'],
-            'selection_policy': 'case_a_q85_r30__case_b_q65_r80_all__v2',
+            'selection_policy': 'case_a_q85_r70__case_b_q85_r90_all__v3',
         }, sort_keys=True))
         atomic_text(output / 'selection.json', json.dumps({
             'schema_version': SCHEMA_VERSION, 'status': 'incomplete', 'detail': 'stream open',
