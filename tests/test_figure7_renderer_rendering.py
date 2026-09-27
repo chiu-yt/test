@@ -33,7 +33,7 @@ class TestFigure7RendererRendering(unittest.TestCase):
         figure = render_plate(replace(bundle, case_b=record), (-20., -20., 20., 20.))
         try:
             self.assertEqual(len(figure.axes[6].patches), 2)
-            self.assertEqual(figure.axes[6].patches[-1].get_edgecolor(), to_rgba('#2E7D32', .95))
+            self.assertEqual(figure.axes[6].patches[-1].get_edgecolor(), to_rgba('#2E7D32', 1.0))
         finally:
             plt.close(figure)
 
@@ -100,11 +100,15 @@ class TestFigure7RendererRendering(unittest.TestCase):
         try:
             expected = ('#2E7D32', '#2E7D32', '#EF6C00', '#C62828')
             for axis, color in zip(figure.axes[:4], expected):
-                self.assertEqual(axis.patches[-1].get_edgecolor(), to_rgba(color, .95))
+                selected = axis.patches[-1]
+                self.assertEqual(selected.get_edgecolor(), to_rgba(color, 1.0))
+                self.assertEqual(selected.get_linewidth(), 2.4)
             unmatched = figure.axes[4]
             self.assertEqual(len(unmatched.patches), 1)
             self.assertTrue(all(spine.get_visible() for spine in unmatched.spines.values()))
             self.assertTrue(all(spine.get_edgecolor() == to_rgba('#C62828')
+                                for spine in unmatched.spines.values()))
+            self.assertTrue(all(spine.get_linewidth() == 1.2
                                 for spine in unmatched.spines.values()))
         finally:
             plt.close(figure)

@@ -88,7 +88,7 @@ def _style_axis(axis: Axes, crop: Crop, unmatched: bool = False) -> None:
         spine.set_visible(unmatched)
         if unmatched:
             spine.set_color(LOW_QUALITY_COLOR)
-            spine.set_linewidth(.8)
+            spine.set_linewidth(1.2)
 
 
 def _draw_box(axis: Axes, box: np.ndarray, color: str | Tuple[float, float, float],
@@ -142,7 +142,7 @@ def _draw_bev(axis: Axes, record: SelectedRecord, index: int, crop: Crop) -> Non
             color = MODERATE_QUALITY_COLOR
         else:
             color = LOW_QUALITY_COLOR
-        _draw_box(axis, boxes[match], color, 1.6, .95, 4)
+        _draw_box(axis, boxes[match], color, 2.4, 1.0, 4)
     _style_axis(axis, crop, unmatched=match < 0)
 
 
