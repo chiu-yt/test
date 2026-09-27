@@ -42,6 +42,10 @@ class TestFigure7RendererPublication(unittest.TestCase):
         summary = (output / 'figure7_summary.md').read_text()
         for required in ('positive-query-only weighting', 'K4 protocol', 'ledger records', 'crop'):
             self.assertIn(required, summary)
+        self.assertIn('2 rows x 5 columns', summary)
+        self.assertIn('green', summary)
+        self.assertIn('orange', summary)
+        self.assertIn('red', summary)
 
     def test_publication_preserves_existing_bundle_when_staging_fails(self) -> None:
         """Given an existing bundle, when rendering fails, then old bytes remain untouched."""

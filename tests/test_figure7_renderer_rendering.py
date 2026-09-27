@@ -5,11 +5,12 @@ import unittest
 
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection
+from matplotlib.colors import to_rgba
 import numpy as np
 
 from test_figure7_renderer_loading import completed_capture
 from tools.figure7_utils.loading import load_capture
-from tools.figure7_utils.rendering import _panel_data, crop_for_case, render_plate
+from tools.figure7_utils.rendering import _panel_data, crop_for_case, render_plate, render_preview
 
 
 class TestFigure7RendererRendering(unittest.TestCase):
@@ -31,9 +32,8 @@ class TestFigure7RendererRendering(unittest.TestCase):
             bundle.case_b.reference, matches=(-1,) * 4, qualities=(.123,) * 4))
         figure = render_plate(replace(bundle, case_b=record), (-20., -20., 20., 20.))
         try:
-            self.assertEqual(len(figure.axes[7].patches), 2)
-            self.assertIn('matched  quality=0.900', figure.axes[7].texts[0].get_text())
-            self.assertIn('0.90 / 0.90 / 0.90 / 0.90', figure.axes[11].texts[2].get_text())
+            self.assertEqual(len(figure.axes[6].patches), 2)
+            self.assertEqual(figure.axes[6].patches[-1].get_edgecolor(), to_rgba('#2E7D32', .95))
         finally:
             plt.close(figure)
 
@@ -56,25 +56,56 @@ class TestFigure7RendererRendering(unittest.TestCase):
             figure = render_plate(replace(bundle, case_b=record), (-20., -20., 20., 20.))
         try:
             self.assertTrue(np.isinf(boxes[0]).all())
-            self.assertEqual(len(figure.axes[7].patches), 2)
-            self.assertTrue(all(np.isfinite(patch.get_path().vertices).all() for patch in figure.axes[7].patches))
+            self.assertEqual(len(figure.axes[6].patches), 2)
+            self.assertTrue(all(np.isfinite(patch.get_path().vertices).all() for patch in figure.axes[6].patches))
             figure.canvas.draw()
         finally:
             plt.close(figure)
 
-    def test_plate_has_exact_two_by_six_layout_and_figure6_orientation(self) -> None:
-        """Given selected cases, when rendered, then twelve ordered panels share row limits."""
+    def test_plate_and_preview_have_five_clean_bev_columns(self) -> None:
         bundle = load_capture(completed_capture(self.root))
         figure = render_plate(bundle, (-20., -20., 20., 20.))
+        preview = render_preview(bundle.case_a, (-20., -20., 20., 20.))
         try:
-            self.assertEqual(len(figure.axes), 12)
-            self.assertEqual([axis.get_title() for axis in figure.axes[:6]], [
-                'Reference', 'View 1', 'View 2', 'View 3', 'View 4',
-                'Summary / Reliability'])
+            self.assertEqual(len(figure.axes), 10)
+            self.assertEqual(len(preview.axes), 5)
+            self.assertEqual([axis.get_title() for axis in figure.axes[:5]], [
+                'Reference', 'View 1', 'View 2', 'View 3', 'View 4'])
             self.assertEqual(figure.axes[0].get_xlim(), figure.axes[4].get_xlim())
             self.assertEqual(figure.axes[0].get_ylim(), figure.axes[4].get_ylim())
-            self.assertEqual(figure.axes[0].get_xlabel(), 'lateral y')
-            self.assertEqual(figure.axes[0].get_ylabel(), 'forward x')
+            forbidden = ('selected quality', 'matched quality', 'accepted', 'rescued',
+                         'forward x', 'lateral y')
+            panel_text = ' '.join(
+                text.get_text().lower()
+                for rendered in (figure, preview)
+                for axis in rendered.axes
+                for text in axis.texts
+            )
+            panel_text += ' ' + ' '.join(
+                '%s %s' % (axis.get_xlabel().lower(), axis.get_ylabel().lower())
+                for rendered in (figure, preview) for axis in rendered.axes
+            )
+            self.assertTrue(all(fragment not in panel_text for fragment in forbidden))
+        finally:
+            plt.close(figure)
+            plt.close(preview)
+
+    def test_selected_and_matched_outlines_encode_quality_without_unmatched_geometry(self) -> None:
+        record = load_capture(completed_capture(self.root)).case_b
+        arrays = dict(record.arrays)
+        arrays['match_indices'] = np.array([[0, 0, 0, -1]])
+        arrays['view_quality'] = np.array([[.85, .70, .699, 0.]])
+
+        figure = render_preview(replace(record, arrays=arrays), (-20., -20., 20., 20.))
+        try:
+            expected = ('#2E7D32', '#2E7D32', '#EF6C00', '#C62828')
+            for axis, color in zip(figure.axes[:4], expected):
+                self.assertEqual(axis.patches[-1].get_edgecolor(), to_rgba(color, .95))
+            unmatched = figure.axes[4]
+            self.assertEqual(len(unmatched.patches), 1)
+            self.assertTrue(all(spine.get_visible() for spine in unmatched.spines.values()))
+            self.assertTrue(all(spine.get_edgecolor() == to_rgba('#C62828')
+                                for spine in unmatched.spines.values()))
         finally:
             plt.close(figure)
 

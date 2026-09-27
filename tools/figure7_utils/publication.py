@@ -82,12 +82,11 @@ def summary_text(bundle: CaptureBundle, point_range: Crop) -> str:
         '- Pairing prefers same class, nearest confidence, largest reliability gap, and distinct tokens.',
         '- Four captured view predictions and actual view points are inverse-aligned with the K4 '
         '`(value - translation) @ inverse(linear).T` convention; no view is reconstructed.',
-        '- Reliability is the exact captured fixed-four-view mean quality and is shown on one shared '
-        'fixed `[0,1]` red-yellow-green scale.', '',
-        '- The continuous reliability scale is intentional: unlike Figure 6 discrete bins, Figure 7 '
-        'preserves the selected proposals\' exact `r` positions.', '',
+        '- Reliability is the exact captured fixed-four-view mean quality.', '',
         '## Rendering contract', '',
-        '- final plate: exactly `2 rows x 6 columns`.',
+        '- final plate: exactly `2 rows x 5 columns`.',
+        '- selected/matched outline: green for quality `>= 0.85`, orange for '
+        '`0.70 <= quality < 0.85`, and red below `0.70` or when unmatched.',
         '- horizontal y / vertical x orientation: `true`.',
         '- row-local crop: half-span `max(12 m, 2 * max(dx,dy))`, clipped to configured range.',
         '- identical limits across Reference and all four views in each row: `true`.',

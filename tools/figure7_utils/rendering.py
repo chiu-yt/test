@@ -10,12 +10,9 @@ matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
-from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.figure import Figure
-from matplotlib.patches import Polygon, Rectangle
+from matplotlib.patches import Polygon
 import numpy as np
-
-from tools.figure6_utils.palette import CLASS_COLORS
 
 from .contracts import CaptureBundle, Crop, SelectedRecord
 
@@ -23,7 +20,7 @@ from .contracts import CaptureBundle, Crop, SelectedRecord
 PLATE_SIZE: Final[Tuple[float, float]] = (11.6, 4.4)
 PREVIEW_SIZE: Final[Tuple[float, float]] = (11.6, 2.3)
 PANEL_TITLES: Final[Tuple[str, ...]] = (
-    'Reference', 'View 1', 'View 2', 'View 3', 'View 4', 'Summary / Reliability',
+    'Reference', 'View 1', 'View 2', 'View 3', 'View 4',
 )
 ROW_LABELS: Final[Tuple[str, str]] = (
     '(a) Case A\nhigh q / low r',
@@ -32,12 +29,11 @@ ROW_LABELS: Final[Tuple[str, str]] = (
 POINT_COLOR: Final[str] = '#707070'
 CONTEXT_COLOR: Final[str] = '#B0BEC5'
 TEXT_COLOR: Final[str] = '#263238'
-UNMATCHED_COLOR: Final[str] = '#C62828'
-PANEL_EDGE_COLOR: Final[str] = '#CFD8DC'
-RELIABILITY_CMAP: Final[LinearSegmentedColormap] = LinearSegmentedColormap.from_list(
-    'figure7_reliability', ('#C62828', '#FDD835', '#2E7D32'),
-)
-RELIABILITY_NORM: Final[Normalize] = Normalize(0.0, 1.0, clip=True)
+HIGH_QUALITY_COLOR: Final[str] = '#2E7D32'
+MODERATE_QUALITY_COLOR: Final[str] = '#EF6C00'
+LOW_QUALITY_COLOR: Final[str] = '#C62828'
+HIGH_QUALITY_MIN: Final[float] = .85
+MODERATE_QUALITY_MIN: Final[float] = .70
 
 
 @dataclass(frozen=True)  # noqa: SLOTS_OK - Python 3.8 runtime.
@@ -82,14 +78,17 @@ def _corners(box: np.ndarray) -> np.ndarray:
     return xy[:, (1, 0)]
 
 
-def _style_axis(axis: Axes, crop: Crop) -> None:
+def _style_axis(axis: Axes, crop: Crop, unmatched: bool = False) -> None:
     axis.set_xlim(crop[1], crop[3])
     axis.set_ylim(crop[0], crop[2])
     axis.set_aspect('equal', adjustable='box')
     axis.set_xticks(())
     axis.set_yticks(())
     for spine in axis.spines.values():
-        spine.set_visible(False)
+        spine.set_visible(unmatched)
+        if unmatched:
+            spine.set_color(LOW_QUALITY_COLOR)
+            spine.set_linewidth(.8)
 
 
 def _draw_box(axis: Axes, box: np.ndarray, color: str | Tuple[float, float, float],
@@ -125,7 +124,7 @@ def _point_style(points: np.ndarray, crop: Crop) -> Tuple[float, float]:
 
 
 def _draw_bev(axis: Axes, record: SelectedRecord, index: int, crop: Crop) -> None:
-    points, boxes, labels = _panel_data(record, index)
+    points, boxes, _ = _panel_data(record, index)
     finite = np.isfinite(points[:, :3]).all(axis=1)
     point_size, point_alpha = _point_style(points, crop)
     axis.scatter(points[finite, 1], points[finite, 0], s=point_size, c=POINT_COLOR,
@@ -135,61 +134,24 @@ def _draw_bev(axis: Axes, record: SelectedRecord, index: int, crop: Crop) -> Non
     reference_index = record.candidate.reference_index
     match = reference_index if index == 0 else int(record.arrays['match_indices'][reference_index, index - 1])
     if match >= 0:
-        label = int(labels[match])
-        raw_rgb = CLASS_COLORS[label - 1]
-        rgb = (raw_rgb[0] / 255.0, raw_rgb[1] / 255.0, raw_rgb[2] / 255.0)
-        _draw_box(axis, boxes[match], rgb, 1.6, .95, 4)
-    quality = 1.0 if index == 0 else float(record.arrays['view_quality'][reference_index, index - 1])
-    state = 'selected' if index == 0 else ('matched' if match >= 0 else 'unmatched')
-    mask_key = 'reference_mask' if index == 0 else 'view_%d_mask' % (index - 1)
-    rescue_key = 'reference_rescue_mask' if index == 0 else 'view_%d_rescue_mask' % (index - 1)
-    accepted = match >= 0 and bool(record.arrays[mask_key][match])
-    rescued = match >= 0 and bool(record.arrays[rescue_key][match])
-    axis.text(.03, .97, '%s  quality=%.3f\naccepted=%s  rescued=%s' % (
-        state, quality, str(accepted).lower(), str(rescued).lower()),
-        transform=axis.transAxes, ha='left', va='top', fontsize=6.0,
-        color=UNMATCHED_COLOR if match < 0 else TEXT_COLOR,
-        bbox={'facecolor': 'white', 'edgecolor': 'none', 'alpha': .78, 'pad': 1.2}, zorder=6)
-    _style_axis(axis, crop)
-
-
-def _draw_summary(axis: Axes, record: SelectedRecord) -> None:
-    reliability = record.candidate.reliability
-    axis.set_xlim(0, 1)
-    axis.set_ylim(0, 1)
-    axis.axis('off')
-    axis.add_patch(Rectangle((.01, .01), .98, .98, fill=False, edgecolor=PANEL_EDGE_COLOR,
-                             linewidth=.6, zorder=0))
-    gradient = np.linspace(0, 1, 256).reshape(1, -1)
-    axis.imshow(gradient, extent=(.10, .90, .15, .23), aspect='auto',
-                cmap=RELIABILITY_CMAP, norm=RELIABILITY_NORM, zorder=1)
-    axis.add_patch(Rectangle((.10, .15), .80, .08, fill=False, edgecolor=TEXT_COLOR,
-                             linewidth=.5, zorder=2))
-    marker = .10 + .80 * reliability
-    axis.plot((marker, marker), (.12, .26), color=TEXT_COLOR, linewidth=1.0, zorder=3)
-    axis.text(.5, .90, '%s  proposal %d' % (
-        record.candidate.class_name, record.candidate.reference_index),
-        ha='center', va='top', fontsize=6.8, color=TEXT_COLOR, weight='bold')
-    axis.text(.5, .72, 'confidence q = %.3f\nreliability r = %.3f' % (
-        record.candidate.score, reliability), ha='center', va='top', fontsize=6.6,
-        color=TEXT_COLOR, linespacing=1.5)
-    axis.text(.5, .48, 'qualities  ' + ' / '.join('%.2f' % value
-              for value in record.arrays['view_quality'][record.candidate.reference_index]),
-              ha='center', va='top', fontsize=5.8,
-              color=TEXT_COLOR)
-    axis.text(.10, .10, '0', ha='center', va='top', fontsize=4.8, color=TEXT_COLOR)
-    axis.text(.90, .10, '1', ha='center', va='top', fontsize=4.8, color=TEXT_COLOR)
+        quality = 1.0 if index == 0 else float(
+            record.arrays['view_quality'][reference_index, index - 1])
+        if quality >= HIGH_QUALITY_MIN:
+            color = HIGH_QUALITY_COLOR
+        elif quality >= MODERATE_QUALITY_MIN:
+            color = MODERATE_QUALITY_COLOR
+        else:
+            color = LOW_QUALITY_COLOR
+        _draw_box(axis, boxes[match], color, 1.6, .95, 4)
+    _style_axis(axis, crop, unmatched=match < 0)
 
 
 def _render_rows(rows: Sequence[SelectedRecord], layout: RenderLayout) -> Figure:
-    figure, axes = plt.subplots(len(rows), 6, figsize=layout.size, squeeze=False)
+    figure, axes = plt.subplots(len(rows), 5, figsize=layout.size, squeeze=False)
     for row_index, record in enumerate(rows):
         crop = crop_for_case(record, layout.point_range)
         for panel_index in range(5):
             _draw_bev(axes[row_index, panel_index], record, panel_index, crop)
-        _draw_summary(axes[row_index, 5], record)
-        axes[row_index, 0].set_ylabel('forward x', fontsize=5.0)
-        axes[row_index, 0].set_xlabel('lateral y', fontsize=5.0)
         position = axes[row_index, 0].get_position()
         figure.text(.008, (position.y0 + position.y1) / 2.0, layout.labels[row_index],
                     ha='left', va='center', fontsize=6.0, color=TEXT_COLOR, linespacing=1.4)
